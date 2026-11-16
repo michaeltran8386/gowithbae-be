@@ -1,6 +1,6 @@
 # Hướng dẫn làm việc — Backend GoWithBae G1
 
-Đọc kèm: [`api/openapi.yaml`](../api/openapi.yaml) (contract), SRS `GWB-REQ-G1` v1.0, và hướng dẫn frontend `gowithbae-fe/docs/DEVELOPMENT.md`.
+Đọc kèm: [`api/openapi.yaml`](../api/openapi.yaml) (contract 0.2.0), [SRS hợp nhất v1.2](SRS.md) từ `GWB-REQ-G1` v1.1/CR-001, và hướng dẫn frontend `gowithbae-fe/docs/DEVELOPMENT.md`.
 
 ## 1. Bức tranh tổng thể
 
@@ -262,3 +262,22 @@ Contract đổi thì FE chạy `npm run gen:api`. Ghi rõ trong commit/PR operat
 | Test bị skip | Docker chưa chạy | Mở Docker Desktop |
 | `RowLevelSecurityTest` fail "Bảng thiếu ENABLE ROW LEVEL SECURITY" | Bảng mới chưa bật RLS | Thêm `ALTER TABLE ... ENABLE ROW LEVEL SECURITY;` vào migration tạo bảng |
 | Migration treo, không báo lỗi | `ALTER`/`LOCK` trên `flyway_schema_history` (Flyway đang giữ lock bảng này) | Không động tới bảng `flyway_schema_history` trong migration |
+
+## CR-001: endpoint, database và nghiệm thu
+
+Nguồn hiện hành: SRS hợp nhất v1.2 (Requirements v1.1), §4/7/13/17. Ba hành vi đã CONF không hỏi lại; actor xác nhận, sửa lượt và nhắc lại sau đổi giờ còn OQ-10/25.
+
+| Endpoint | Ý nghĩa | Trạng thái khung |
+|---|---|---|
+| `GET /me/places/{placeId}/visit-count` | Tổng YES hợp lệ của đúng tài khoản/chi nhánh; không đếm click/analytics/dismiss | Contract, trả 501 |
+| `GET /date-plans/{planId}/reminder` | `reminder`, `shouldShow`, `canRespond` do server kiểm tra | Contract, trả 501 |
+| `PUT /date-plans/{planId}/reminder` | `CONFIRM_VISIT` ghi YES và ANSWERED cùng transaction; `DISMISS` chỉ lưu đóng nhắc | Contract, trả 501 |
+| `GET /share-grants/{inviteToken}` | `candidates` được xem trước khi nhập tên/join, không cần tài khoản | Contract mở rộng, trả 501 |
+
+- `visit-report.answer=NO` là câu trả lời Không, không thay `DISMISS`. Giữ endpoint cũ tương thích cho nhánh được PO duyệt.
+- Danh tính lấy từ server; count chỉ bearer của tài khoản đó. Không mặc định guest được ghi count riêng hoặc đọc của chủ tạo; reminder delegate phải kiểm tra actor/grant trước đọc và ghi.
+- V4 thêm unique `(plan_id, respondent_user_id)` / `(plan_id, respondent_recipient_id)` theo điều kiện NOT NULL. Nếu dữ liệu cũ trùng thì dừng migration; không tự xóa/gộp câu trả lời. Sao lưu và thống nhất cách xử lý trước khi áp dụng lên DB có dữ liệu.
+- `date_reminder` có RLS, một hàng/plan/người nhận; trạng thái nhắc, plan và visit_answer là ba trục riêng. Không tự tạo lại nhắc sau đổi giờ hoặc chọn actor trước khi OQ-10/25 chốt.
+- Không cần bảng đếm riêng ở giai đoạn khung: truy vấn COUNT DISTINCT lượt hợp lệ theo tài khoản + place; lỗi đọc phải là lỗi, không giả 0.
+- Khi implement xác nhận: transaction kiểm tra lại quyền/plan/thời điểm/nhắc, upsert câu trả lời duy nhất, đóng nhắc; retry không tạo lượt mới. Side effect analytics lỗi không biến kết quả đã lưu thành chưa lưu.
+- Nghiệm thu thêm AC-053–058: hai plan YES cùng nơi = 2, retry vẫn 1 cho một plan; nhắc tại scheduled_at không chờ PAST; dismiss tải lại vẫn đóng; guest xem trước không đăng nhập nhưng lưu yêu thích cần đăng nhập. `VisitSchemaTest` hiện chỉ kiểm tra ràng buộc DB, chưa chứng minh API đã triển khai.

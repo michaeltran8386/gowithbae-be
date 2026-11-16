@@ -1,10 +1,12 @@
 openapi: 3.0.3
 info:
   title: GoWithBae G1 API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     API contract cho GoWithBae G1 (web khách hàng + quản trị nội bộ).
-    Nguồn yêu cầu: `GWB-REQ-G1` v1.0 (Draft, 13-11-2026). Mỗi operation ghi mã FR/RULE liên quan.
+    Nguồn yêu cầu: `GWB-REQ-G1` v1.1 (15-11-2026), SRS hợp nhất v1.2 và CR-001.
+    Phủ FR-01..35. Số lần đã đi, bỏ qua lời nhắc chỉ đóng và xem link không đăng nhập đã CONF;
+    các nhánh actor/sửa lượt/nhắc lại sau đổi giờ còn OQ-10/25. Mỗi operation ghi mã FR/RULE liên quan.
 
     Quy ước:
     - `x-status: draft` = hành vi phụ thuộc câu hỏi mở (`x-oq`). Không tự chốt chính sách khi implement;
@@ -360,6 +362,26 @@ paths:
         '202': { description: Accepted }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
+  /me/places/{placeId}/visit-count:
+    get:
+      tags: [Me]
+      operationId: getMyPlaceVisitCount
+      summary: Số lần tự xác nhận đã đi tại một chi nhánh của tài khoản hiện tại (FR-35, RULE-29)
+      description: |
+        Danh tính lấy từ bearer, không nhận userId từ client. Tính từ các lượt YES hợp lệ,
+        mỗi plan/người chỉ một lượt; không đếm click, analytics, dismissal hoặc chuỗi ngày.
+        Không cấp qua phiên khách hay ghép vào response địa điểm công khai. Lỗi đọc không được giả count=0.
+        Lịch sử nơi ẩn và sửa lượt còn OQ-10/11/25; không chặn chức năng đếm lượt hợp lệ đã CONF.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlaceId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaceVisitCount' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /me/email-change/verify:
     post:
       tags: [Me]
@@ -646,6 +668,10 @@ paths:
       tags: [ShareGrants]
       operationId: previewShareGrant
       summary: Kiểm tra link mời trước khi tham gia; không lộ danh sách gốc (FR-11, RULE-12)
+      description: |
+        CR-001/RULE-30: khách xem các lựa chọn qua link hợp lệ ngay, không cần tài khoản,
+        nhập tên hoặc chiếm suất. displayName chỉ bắt buộc khi join; chỉ cấp dữ liệu trong lời mời,
+        không email, ghi chú riêng, danh sách gốc hoặc số lần đã đi của người tạo.
       parameters: [{ $ref: '#/components/parameters/InviteToken' }]
       responses:
         '200':
@@ -789,9 +815,13 @@ paths:
     put:
       tags: [DatePlans]
       operationId: reportVisit
-      summary: Tự báo đã đến sau giờ hẹn; không phải xác minh của đối tác (FR-18, RULE-15)
+      summary: Tự xác nhận chuyến đi; không dùng để Bỏ qua lời nhắc (FR-18, FR-35, RULE-15/29)
+      description: |
+        Giữ tương thích thao tác ghi câu trả lời. NO là câu trả lời Không, không phải dismissal.
+        Retry cùng plan/người không tạo lượt mới. Quyền actor và sửa câu trả lời còn OQ-10/25.
+        UI lời nhắc dùng /reminder với CONFIRM_VISIT hoặc DISMISS, không gửi NO khi bấm Bỏ qua.
       x-status: draft
-      x-oq: [OQ-10]
+      x-oq: [OQ-10, OQ-25]
       security: [{ bearerAuth: [] }, { recipientSession: [] }]
       parameters: [{ $ref: '#/components/parameters/PlanId' }]
       requestBody:
@@ -805,6 +835,56 @@ paths:
                 answer: { type: string, enum: [YES, NO] }
       responses:
         '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /date-plans/{planId}/reminder:
+    get:
+      tags: [DatePlans]
+      operationId: getDateReminder
+      summary: Trạng thái lời nhắc Đi chưa của người xem hiện tại (FR-18, RULE-15)
+      description: |
+        Đến scheduledAt, web hiển thị khi shouldShow=true; không cần plan chuyển PAST.
+        Dismissed/answered/cancelled thì shouldShow=false kể cả tải lại. Chưa có nhắc trả reminder=null.
+        Server tính shouldShow/canRespond sau kiểm tra quyền và trạng thái hiện hành, không tin client.
+        Không nhắc plan đã hủy, không tự thêm email/push. Actor và nhắc lại sau sửa giờ còn OQ-10/25.
+      x-status: draft
+      x-oq: [OQ-10, OQ-25]
+      security: [{ bearerAuth: [] }, { recipientSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DateReminderState' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [DatePlans]
+      operationId: respondToDateReminder
+      summary: Đã đi hoặc chỉ Bỏ qua lời nhắc (FR-18, FR-35, RULE-15/29)
+      description: |
+        DISMISS chỉ lưu dismissed/dismissedAt, giữ visitAnswer và plan, không popup khác; retry không nhắc lại.
+        CONFIRM_VISIT ghi YES duy nhất và chuyển nhắc ANSWERED trong cùng transaction.
+        Danh tính lấy từ phiên server; phiên khách không tự tạo lượt cá nhân. Kiểm tra quyền, plan chưa hủy,
+        scheduledAt đã đến và trạng thái nhắc tại thời điểm ghi. Retry cùng action đã thành công trả trạng thái;
+        action khác trên nhắc đã đóng trả 409, không tự mở lại/sửa lượt trước khi OQ-10/25 chốt.
+      x-status: draft
+      x-oq: [OQ-10, OQ-25]
+      security: [{ bearerAuth: [] }, { recipientSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DateReminderAction' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DateReminderState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
 
@@ -2180,10 +2260,14 @@ components:
             shareGrant: { $ref: '#/components/schemas/ShareGrantCreated' }
     ShareGrantPreview:
       type: object
-      required: [creatorName, candidateCount, slotAvailable]
+      required: [creatorName, candidateCount, candidates, slotAvailable]
       properties:
         creatorName: { type: string }
         candidateCount: { type: integer }
+        candidates:
+          type: array
+          description: Chỉ nội dung được chia sẻ; xem trước không chiếm suất hoặc bắt nhập tên.
+          items: { $ref: '#/components/schemas/PlaceCard' }
         slotAvailable: { type: boolean }
         expiresAt: { type: string, format: date-time }
     RecipientSessionToken:
@@ -2194,6 +2278,39 @@ components:
         choiceSessionId: { type: string, format: uuid }
 
     # ── date plans ──
+    PlaceVisitCount:
+      type: object
+      required: [placeId, count]
+      properties:
+        placeId: { type: string, format: uuid }
+        count: { type: integer, format: int64, minimum: 0 }
+    DateReminderStatus:
+      type: string
+      enum: [PENDING, SHOWN, DISMISSED, ANSWERED, CANCELLED]
+    DateReminder:
+      type: object
+      required: [id, planId, scheduledAt, status]
+      properties:
+        id: { type: string, format: uuid }
+        planId: { type: string, format: uuid }
+        scheduledAt: { type: string, format: date-time }
+        status: { $ref: '#/components/schemas/DateReminderStatus' }
+        dismissedAt: { type: string, format: date-time, nullable: true }
+        answeredAt: { type: string, format: date-time, nullable: true }
+    DateReminderState:
+      type: object
+      required: [reminder, shouldShow, canRespond]
+      properties:
+        reminder:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/DateReminder' }]
+        shouldShow: { type: boolean, description: 'Server tính theo scheduledAt/quyền/plan và trạng thái nhắc, không phải plan PAST.' }
+        canRespond: { type: boolean, description: 'Theo actor đã duyệt; không mặc định người nhận link được ghi lượt cá nhân.' }
+    DateReminderAction:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [CONFIRM_VISIT, DISMISS] }
     DatePlanStatus:
       type: string
       enum: [SCHEDULED, CANCELLED, PAST]
