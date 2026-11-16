@@ -2,6 +2,8 @@
 
 Backend GoWithBae G1: Spring Boot 4.1 · Java 21 · PostgreSQL (Supabase) · Flyway.
 
+**Hướng dẫn làm việc (Supabase, quy trình endpoint, migration):** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · **Tech stack:** [TECHSTACK.md](TECHSTACK.md)
+
 ## API contract
 
 `api/openapi.yaml` là **nguồn chuẩn duy nhất** cho FE và BE (OpenAPI 3.0, phủ FR-01..FR-34 của `GWB-REQ-G1` v1.0).
@@ -35,6 +37,7 @@ src/main/java/vn/gowithbae/
 src/main/resources/db/migration
   V1__init_schema.sql          toàn bộ schema §6
   V2__seed_reference_data.sql  vai trò + nhãn lọc §5.1
+  V3__enable_rls_lock_supabase_api.sql  khóa Supabase Data API (RLS + revoke anon)
 ```
 
 ## Đã có / chưa có
