@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: gowithbae-be
+  config:
+    import: optional:file:.env[.properties]
+  datasource:
+    # Supabase: Project Settings → Database → Connection string (JDBC). Dùng session pooler (port 5432) hoặc direct.
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+  jackson:
+    time-zone: Asia/Ho_Chi_Minh
+
+app:
+  jwt:
+    secret: ${JWT_SECRET}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
