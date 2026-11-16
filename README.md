@@ -2,6 +2,8 @@
 
 Backend GoWithBae G1: Spring Boot 4.1 · Java 21 · PostgreSQL (Supabase) · Flyway.
 
+**Yêu cầu sản phẩm:** [SRS hợp nhất G1](docs/SRS.md) — Draft, giữ đầy đủ câu hỏi mở và đề xuất chờ duyệt.
+
 **Hướng dẫn làm việc (Supabase, quy trình endpoint, migration):** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · **Tech stack:** [TECHSTACK.md](TECHSTACK.md)
 
 ## API contract
