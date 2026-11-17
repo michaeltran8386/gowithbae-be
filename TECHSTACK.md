@@ -108,3 +108,7 @@ Cấu hình: `delegatePattern`, `useTags`, `useSpringBoot4`, `useJackson3`, `con
 - openapi-generator: nâng xong phải `./mvnw clean test` vì code sinh có thể đổi.
 - Flyway: không nâng major giữa chừng một đợt phát hành.
 - Sau mỗi lần nâng: `./mvnw clean test` phải xanh, và cập nhật bảng phiên bản ở file này.
+
+## 7. Người A — bổ sung ngày 17-11-2026
+
+Spring Boot Mail/JavaMailSender dùng SMTP cấu hình qua môi trường (phiên bản do Boot BOM quản lý). JWT HS256 kiểm tra issuer/sid/expiry/trạng thái và quyền DB; staff có email OTP + TOTP HMAC-SHA1 6 số/30 giây, secret AES-GCM trong staff_mfa. Rate limit PostgreSQL lưu key HMAC. Kho ảnh local riêng tư; chưa dùng Supabase Storage. OpenAPI 0.3.0 thêm staffCode tùy chọn, các giá trị triển khai và interface phụ thuộc ghi tại docs/MEMBER_A.md.
