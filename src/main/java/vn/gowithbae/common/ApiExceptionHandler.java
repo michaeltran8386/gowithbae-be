@@ -24,6 +24,14 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
+    @ExceptionHandler(jakarta.validation.ConstraintViolationException.class)
+    ProblemDetail constraintViolation(jakarta.validation.ConstraintViolationException ex) {
+        ProblemDetail body = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Dữ liệu không hợp lệ");
+        body.setProperty("errors", ex.getConstraintViolations().stream().map(v -> Map.of(
+                "field", v.getPropertyPath().toString(), "message", v.getMessage())).toList());
+        return body;
+    }
+
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(MethodArgumentNotValidException ex,
             HttpHeaders headers, HttpStatusCode status, WebRequest request) {

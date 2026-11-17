@@ -2,7 +2,9 @@ spring:
   application:
     name: gowithbae-be
   config:
-    import: optional:file:.env[.properties]
+    import:
+      - optional:file:.env[.properties]
+      - classpath:application-uploads.yml
   datasource:
     # Supabase: Project Settings → Database → Connection string (JDBC). Dùng session pooler (port 5432) hoặc direct.
     url: ${DB_URL}
@@ -16,10 +18,27 @@ spring:
     enabled: true
   jackson:
     time-zone: Asia/Ho_Chi_Minh
+  mail:
+    host: ${SMTP_HOST:localhost}
+    port: ${SMTP_PORT:587}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${SMTP_AUTH:true}
+      mail.smtp.starttls.enable: ${SMTP_STARTTLS:true}
+      mail.smtp.starttls.required: ${SMTP_STARTTLS:true}
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
+      mail.debug: false
 
 app:
   jwt:
     secret: ${JWT_SECRET}
+  mail:
+    from: ${SMTP_FROM:}
+  auth:
+    mfa-key: ${AUTH_MFA_KEY:${app.jwt.secret}}
 
 management:
   endpoints:
