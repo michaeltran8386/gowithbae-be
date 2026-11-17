@@ -81,7 +81,7 @@ class PlacesApiTest {
 
     @Test
     void unimplementedOperationReturns501AndPrivateRequiresAuth() throws Exception {
-        mvc.perform(get("/api/v1/taxonomies")).andExpect(status().isNotImplemented());
+        mvc.perform(get("/api/v1/places/{id}", java.util.UUID.randomUUID())).andExpect(status().isNotImplemented());
         mvc.perform(get("/api/v1/me")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/v1/admin/places")).andExpect(status().isUnauthorized());
     }

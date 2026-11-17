@@ -20,6 +20,9 @@ spring:
 app:
   jwt:
     secret: ${JWT_SECRET}
+  files:
+    # URL gốc để ghép với stored_file.storage_key (OQ-21 chưa chọn nơi lưu). Để trống = API trả coverUrl/url null.
+    public-base-url: ${FILES_PUBLIC_BASE_URL:}
 
 management:
   endpoints:
