@@ -53,9 +53,15 @@ public class SecurityConfig {
                 .requestMatchers(API + "/auth/otp/**", API + "/share-grants/**").permitAll()
                 // Bearer HOẶC X-Recipient-Session: delegate bắt buộc kiểm tra một trong hai (RULE-12)
                 .requestMatchers(HttpMethod.GET, API + "/choice-sessions/*", API + "/date-plans/*",
-                        API + "/date-plans/*/calendar.ics").permitAll()
-                .requestMatchers(HttpMethod.PUT, API + "/choice-sessions/*/votes/*", API + "/date-plans/*/visit-report").permitAll()
-                .requestMatchers(API + "/admin/users/**", API + "/admin/audit-logs", API + "/admin/reports/**").hasRole("SUPER_ADMIN")
+                        API + "/date-plans/*/calendar.ics", API + "/date-plans/*/reminder").permitAll()
+                .requestMatchers(HttpMethod.PUT, API + "/choice-sessions/*/votes/*", API + "/date-plans/*/visit-report",
+                        API + "/date-plans/*/reminder").permitAll()
+                .requestMatchers(API + "/admin/users/**", API + "/admin/audit-logs", API + "/admin/reports/**",
+                        API + "/admin/taxonomies/**", API + "/admin/areas/**").hasRole("SUPER_ADMIN")
+                .requestMatchers(API + "/admin/places/**", API + "/admin/collections/**", API + "/admin/imports/**")
+                        .hasAnyRole("EDITOR", "REVIEWER", "SUPER_ADMIN")
+                .requestMatchers(API + "/admin/place-reports/**").hasAnyRole("REVIEWER", "EDITOR", "SUPER_ADMIN")
+                .requestMatchers(API + "/admin/support-tickets/**").hasAnyRole("SUPPORT", "SUPER_ADMIN")
                 .requestMatchers(API + "/admin/**").hasAnyRole("EDITOR", "REVIEWER", "SUPPORT", "SUPER_ADMIN")
                 .anyRequest().authenticated())
             .exceptionHandling(e -> e.authenticationEntryPoint((request, response, failure) -> writeProblem(json, response, 401))

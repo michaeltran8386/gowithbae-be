@@ -1,6 +1,9 @@
 package vn.gowithbae.auth;
 
+import java.util.UUID;
+
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -8,10 +11,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import vn.gowithbae.api.MeApiDelegate;
+import vn.gowithbae.api.model.PlaceVisitCount;
 import vn.gowithbae.api.model.RequestEmailChangeRequest;
 import vn.gowithbae.api.model.User;
 import vn.gowithbae.api.model.UserUpdate;
 import vn.gowithbae.api.model.VerifyEmailChangeRequest;
+import vn.gowithbae.me.VisitCountService;
 import vn.gowithbae.platform.AccountLifecycleParticipant;
 import vn.gowithbae.platform.CurrentUser;
 import vn.gowithbae.platform.FileService;
@@ -24,10 +29,25 @@ public class MeDelegate implements MeApiDelegate {
     private final AuthService auth;
     private final FileService files;
     private final ObjectProvider<AccountLifecycleParticipant> lifecycle;
+    private ObjectProvider<VisitCountService> visitCount;
 
     public MeDelegate(CurrentUser current,JdbcClient jdbc,UserAccounts users,AuthService auth,FileService files,
             ObjectProvider<AccountLifecycleParticipant> lifecycle){
         this.current=current;this.jdbc=jdbc;this.users=users;this.auth=auth;this.files=files;this.lifecycle=lifecycle;
+    }
+
+    @Autowired
+    void setVisitCount(ObjectProvider<VisitCountService> visitCount) {
+        this.visitCount = visitCount;
+    }
+
+    @Override
+    public ResponseEntity<PlaceVisitCount> getMyPlaceVisitCount(UUID placeId) {
+        VisitCountService service = visitCount == null ? null : visitCount.getIfAvailable();
+        if (service == null) {
+            return MeApiDelegate.super.getMyPlaceVisitCount(placeId);
+        }
+        return ResponseEntity.ok(service.getMyPlaceVisitCount(placeId));
     }
     @Override public ResponseEntity<User> getMe(){return ResponseEntity.ok(users.get(current.id()));}
 
@@ -70,5 +90,4 @@ public class MeDelegate implements MeApiDelegate {
         lifecycle.orderedStream().forEach(participant->participant.revokeAccess(id));
         return ResponseEntity.accepted().build(); // Nhận yêu cầu; không xóa phá dữ liệu/lịch sử trước chính sách retention.
     }
-    // FR-35 thuộc C: getMyPlaceVisitCount giữ delegate mặc định tới khi C cung cấp query service.
 }

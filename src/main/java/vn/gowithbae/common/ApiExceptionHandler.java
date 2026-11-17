@@ -58,7 +58,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     ProblemDetail constraintViolation(ConstraintViolationException ex) {
         ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Dữ liệu không hợp lệ");
         pd.setProperty("errors", ex.getConstraintViolations().stream()
-                .map(v -> Map.of("field", lastNode(v.getPropertyPath()), "message", v.getMessage()))
+                .map(v -> Map.of("field", lastNode(v.getPropertyPath()), "message", String.valueOf(v.getMessage())))
                 .toList());
         return pd;
     }

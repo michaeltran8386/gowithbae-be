@@ -81,9 +81,9 @@ class PlacesApiTest {
     }
 
     @Test
-    void unimplementedOperationReturns501AndPrivateRequiresAuth() throws Exception {
+    void reportPlaceForMissingPlaceReturns404AndPrivateRequiresAuth() throws Exception {
         mvc.perform(post("/api/v1/places/{id}/reports", java.util.UUID.randomUUID())
-                .contentType("application/json").content("{\"reason\":\"OTHER\"}")).andExpect(status().isNotImplemented());
+                .contentType("application/json").content("{\"reason\":\"OTHER\"}")).andExpect(status().isNotFound());
         mvc.perform(get("/api/v1/me")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/v1/admin/places")).andExpect(status().isUnauthorized());
     }

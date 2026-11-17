@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -23,13 +24,16 @@ import vn.gowithbae.api.model.BudgetBand;
 import vn.gowithbae.api.model.PageMeta;
 import vn.gowithbae.api.model.PlaceCard;
 import vn.gowithbae.api.model.PlaceDetail;
+import vn.gowithbae.api.model.PlaceReportCreate;
+import vn.gowithbae.api.model.PlaceReportReceipt;
 import vn.gowithbae.api.model.PlaceSearchPage;
 import vn.gowithbae.api.model.TaxonomyGroup;
 import vn.gowithbae.common.web.Problems;
+import vn.gowithbae.report.PlaceReportService;
 
 /**
- * Tìm/lọc, chi tiết, so sánh địa điểm công khai (FR-02..06, RULE-01..06).
- * {@code reportPlace} thuộc phần báo sai (thành viên C), vẫn trả 501 từ default method.
+ * Tìm/lọc, chi tiết, so sánh địa điểm công khai (B: FR-02..06, RULE-01..06)
+ * và gửi báo sai địa điểm (C: FR-19, RULE-18).
  */
 @Service
 public class PlacesDelegate implements PlacesApiDelegate {
@@ -40,10 +44,17 @@ public class PlacesDelegate implements PlacesApiDelegate {
 
     private final JdbcClient jdbc;
     private final PlaceReader reader;
+    private final PlaceReportService placeReportService;
 
-    public PlacesDelegate(JdbcClient jdbc, PlaceReader reader) {
+    public PlacesDelegate(JdbcClient jdbc, PlaceReader reader, PlaceReportService placeReportService) {
         this.jdbc = jdbc;
         this.reader = reader;
+        this.placeReportService = placeReportService;
+    }
+
+    @Override
+    public ResponseEntity<PlaceReportReceipt> reportPlace(UUID placeId, PlaceReportCreate placeReportCreate) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(placeReportService.submitReport(placeId, placeReportCreate));
     }
 
     @Override
