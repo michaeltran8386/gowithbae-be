@@ -16,6 +16,11 @@ spring:
     enabled: true
   jackson:
     time-zone: Asia/Ho_Chi_Minh
+  servlet:
+    multipart:
+      # CSV nhập địa điểm tối đa 2 MB (shortcut OQ-21); để dư cho phần multipart.
+      max-file-size: 3MB
+      max-request-size: 3MB
 
 app:
   jwt:

@@ -124,6 +124,15 @@ public class AdminPlaceService {
     /** Tạo nháp; đủ điều kiện xuất bản chỉ kiểm tra khi SUBMIT/APPROVE (RULE-20). */
     @Transactional
     public AdminPlace create(AdminPlaceWrite w) {
+        return get(createDraft(w, null));
+    }
+
+    /**
+     * Tạo nháp, trả id (không dựng lại hồ sơ). Dùng chung cho tạo tay và nhập CSV;
+     * {@code auditReason} ghi nguồn tạo, ví dụ lô CSV.
+     */
+    @Transactional
+    public UUID createDraft(AdminPlaceWrite w, String auditReason) {
         validate(w, null);
         UUID id;
         try {
@@ -143,8 +152,8 @@ public class AdminPlaceService {
         }
         writeChildren(id, w);
         searchText.refresh(List.of(id));
-        audit.log(CurrentUser.id(), "PLACE_CREATE", "place", id, null, snapshot(id), null);
-        return get(id);
+        audit.log(CurrentUser.id(), "PLACE_CREATE", "place", id, null, snapshot(id), auditReason);
+        return id;
     }
 
     @Transactional
