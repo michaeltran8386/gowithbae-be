@@ -6,10 +6,6 @@ import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -17,26 +13,34 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import jakarta.servlet.http.HttpServletRequest;
+import vn.gowithbae.platform.CurrentUser;
+import vn.gowithbae.platform.SecretHash;
 
-/** Đọc danh tính Bearer JWT / X-Recipient-Session / fingerprint ẩn danh từ request hiện hành. */
+/**
+ * Kết nối CurrentUser / SecretHash của Người A với phiên khách X-Recipient-Session và fingerprint ẩn danh của Người C.
+ */
 @Component
 public class ActorResolver {
 
     public static final String RECIPIENT_SESSION_HEADER = "X-Recipient-Session";
 
     private final JdbcClient jdbc;
+    private final CurrentUser currentUser;
+    private final SecretHash secretHash;
     private final String inviteBaseUrl;
 
-    public ActorResolver(JdbcClient jdbc, @Value("${app.invite.base-url:}") String inviteBaseUrl) {
+    public ActorResolver(
+            JdbcClient jdbc,
+            CurrentUser currentUser,
+            SecretHash secretHash,
+            @Value("${app.invite.base-url:}") String inviteBaseUrl) {
         this.jdbc = jdbc;
+        this.currentUser = currentUser;
+        this.secretHash = secretHash;
         this.inviteBaseUrl = inviteBaseUrl == null ? "" : inviteBaseUrl.trim();
     }
 
-    public record UserPrincipal(UUID userId, String displayName, String status) {
-        public boolean isActive() {
-            return "ACTIVE".equals(status);
-        }
-    }
+    public record UserPrincipal(UUID userId, String displayName, String status) {}
 
     public record RecipientPrincipal(
             UUID recipientSessionId,
@@ -44,85 +48,36 @@ public class ActorResolver {
             UUID choiceSessionId,
             String displayName,
             boolean grantRevoked,
-            boolean recipientRevoked) {
+            boolean recipientRevoked,
+            boolean creatorActive) {
 
         public boolean isValidAccess() {
-            return !grantRevoked && !recipientRevoked;
+            return !grantRevoked && !recipientRevoked && creatorActive;
         }
     }
 
-    /** Bắt buộc thành viên đã đăng nhập, phiên chưa thu hồi và tài khoản chưa khóa/yêu cầu xóa (RULE-17). */
+    /** Bắt buộc thành viên đang ACTIVE, phiên chưa thu hồi và đủ điều kiện MFA qua CurrentUser của Người A. */
     public UserPrincipal requireActiveUser() {
-        UserPrincipal user = findAuthenticatedUser(true)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Chưa đăng nhập hoặc phiên hết hạn"));
-        if (!user.isActive()) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tài khoản đang bị khóa hoặc chờ xóa");
-        }
-        return user;
+        currentUser.requireActive();
+        UUID uid = currentUser.id();
+        return loadActiveUser(uid)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tài khoản không còn hiệu lực"));
     }
 
-    /** Trả Optional user nếu request mang Bearer JWT; kiểm tra phiên thu hồi và trạng thái xóa. */
-    public Optional<UserPrincipal> findAuthenticatedUser(boolean failOnInvalidToken) {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (!(auth instanceof JwtAuthenticationToken jwtAuth)) {
+    /** Trả Optional user nếu request có Bearer JWT hợp lệ; ngược lại trả empty (cho luồng guest/ẩn danh). */
+    public Optional<UserPrincipal> findAuthenticatedUser() {
+        Optional<UUID> uidOpt = currentUser.optionalId();
+        if (uidOpt.isEmpty()) {
             return Optional.empty();
         }
-        Jwt jwt = jwtAuth.getToken();
-        UUID userId;
-        try {
-            userId = UUID.fromString(jwt.getSubject());
-        } catch (IllegalArgumentException ex) {
-            if (failOnInvalidToken) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token không hợp lệ");
-            }
-            return Optional.empty();
-        }
-
-        String sidClaim = jwt.getClaimAsString("sid");
-        if (sidClaim != null && !sidClaim.isBlank()) {
-            UUID sid;
-            try {
-                sid = UUID.fromString(sidClaim);
-            } catch (IllegalArgumentException ex) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Phiên đăng nhập không hợp lệ");
-            }
-            Boolean validSession = jdbc.sql("""
-                    SELECT EXISTS (
-                        SELECT 1 FROM access_session
-                        WHERE id = :sid AND user_id = :uid AND revoked_at IS NULL AND expires_at > now()
-                    )
-                    """)
-                    .param("sid", sid)
-                    .param("uid", userId)
-                    .query(Boolean.class)
-                    .single();
-            if (!Boolean.TRUE.equals(validSession)) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Phiên đăng nhập đã hết hạn hoặc bị thu hồi");
-            }
-        }
-
-        Optional<UserPrincipal> user = jdbc.sql("""
-                SELECT id, display_name, status
-                FROM app_user
-                WHERE id = :uid
-                """)
-                .param("uid", userId)
-                .query((rs, rowNum) -> new UserPrincipal(
-                        rs.getObject("id", UUID.class),
-                        rs.getString("display_name"),
-                        rs.getString("status")))
-                .optional();
-
-        if (user.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tài khoản không tồn tại");
-        }
-        if ("DELETION_REQUESTED".equals(user.get().status())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Tài khoản đã yêu cầu xóa");
-        }
-        return user;
+        currentUser.requireActive();
+        return loadActiveUser(uidOpt.get());
     }
 
-    /** Đọc phiên người nhận từ header X-Recipient-Session và kiểm tra cả trạng thái grant nguồn (RULE-12). */
+    /**
+     * Đọc phiên người nhận từ header X-Recipient-Session:
+     * kiểm tra cả recipient_session, share_grant nguồn chưa bị thu hồi và chủ tạo vẫn ACTIVE (MEMBER_A.md / RULE-17).
+     */
     public Optional<RecipientPrincipal> findRecipientPrincipal() {
         Optional<HttpServletRequest> reqOpt = currentRequest();
         if (reqOpt.isEmpty()) {
@@ -136,9 +91,12 @@ public class ActorResolver {
         return jdbc.sql("""
                 SELECT rs.id AS rs_id, rs.share_grant_id, rs.session_id, rs.display_name,
                        (sg.revoked_at IS NOT NULL) AS grant_revoked,
-                       (rs.revoked_at IS NOT NULL) AS recipient_revoked
+                       (rs.revoked_at IS NOT NULL) AS recipient_revoked,
+                       (u.status = 'ACTIVE') AS creator_active
                 FROM recipient_session rs
                 JOIN share_grant sg ON sg.id = rs.share_grant_id
+                JOIN choice_session cs ON cs.id = rs.session_id
+                JOIN app_user u ON u.id = cs.creator_id
                 WHERE rs.token_hash = :hash
                 """)
                 .param("hash", tokenHash)
@@ -148,21 +106,25 @@ public class ActorResolver {
                         rs.getObject("session_id", UUID.class),
                         rs.getString("display_name"),
                         rs.getBoolean("grant_revoked"),
-                        rs.getBoolean("recipient_revoked")))
+                        rs.getBoolean("recipient_revoked"),
+                        rs.getBoolean("creator_active")))
                 .optional()
                 .filter(RecipientPrincipal::isValidAccess);
     }
 
-    /** Băm IP + User-Agent cho chống lạm dụng báo sai ẩn danh (không lưu IP thô). */
-    public String resolveClientFingerprint() {
+    public String resolveClientPeerKey() {
         return currentRequest().map(req -> {
             String forwarded = req.getHeader("X-Forwarded-For");
             String ip = (forwarded != null && !forwarded.isBlank())
                     ? forwarded.split(",")[0].trim()
                     : String.valueOf(req.getRemoteAddr());
             String ua = String.valueOf(req.getHeader("User-Agent"));
-            return TokenHashUtil.sha256Hex(ip + "|" + ua);
-        }).orElseGet(() -> TokenHashUtil.sha256Hex("unknown"));
+            return ip + "|" + ua;
+        }).orElse("unknown");
+    }
+
+    public String resolveClientFingerprint() {
+        return secretHash.digest("report-fp:" + resolveClientPeerKey());
     }
 
     public String buildInviteUrl(String inviteToken) {
@@ -176,6 +138,20 @@ public class ActorResolver {
                         .path(inviteToken)
                         .toUriString())
                 .orElse("https://gowithbae.vn/invite/" + inviteToken);
+    }
+
+    private Optional<UserPrincipal> loadActiveUser(UUID userId) {
+        return jdbc.sql("""
+                SELECT id, display_name, status
+                FROM app_user
+                WHERE id = :uid AND status = 'ACTIVE'
+                """)
+                .param("uid", userId)
+                .query((rs, rowNum) -> new UserPrincipal(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("display_name"),
+                        rs.getString("status")))
+                .optional();
     }
 
     private Optional<HttpServletRequest> currentRequest() {

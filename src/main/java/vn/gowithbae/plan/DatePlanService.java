@@ -34,9 +34,9 @@ import vn.gowithbae.common.ActorResolver.RecipientPrincipal;
 import vn.gowithbae.common.ActorResolver.UserPrincipal;
 import vn.gowithbae.common.IdempotencyService;
 import vn.gowithbae.common.TimeHelper;
-import vn.gowithbae.shared.PlaceQueryService;
-import vn.gowithbae.shared.PlaceQueryService.OpeningStatus;
-import vn.gowithbae.shared.PlaceQueryService.PlaceSummary;
+import vn.gowithbae.shared.PlaceCatalogService;
+import vn.gowithbae.shared.PlaceCatalogService.OpeningStatus;
+import vn.gowithbae.shared.PlaceCatalogService.PlaceSummary;
 
 /** Nghiệp vụ kế hoạch buổi hẹn, lời nhắc Đi chưa?, tự xác nhận đã đi và xuất lịch (FR-15..18, CR-001). */
 @Service
@@ -44,7 +44,7 @@ public class DatePlanService {
 
     private final JdbcClient jdbc;
     private final ActorResolver actorResolver;
-    private final PlaceQueryService placeQueryService;
+    private final PlaceCatalogService placeCatalogService;
     private final IdempotencyService idempotencyService;
     private final IcsCalendarFormatter icsFormatter;
     private final Clock clock;
@@ -52,13 +52,13 @@ public class DatePlanService {
     public DatePlanService(
             JdbcClient jdbc,
             ActorResolver actorResolver,
-            PlaceQueryService placeQueryService,
+            PlaceCatalogService placeCatalogService,
             IdempotencyService idempotencyService,
             IcsCalendarFormatter icsFormatter,
             Clock clock) {
         this.jdbc = jdbc;
         this.actorResolver = actorResolver;
-        this.placeQueryService = placeQueryService;
+        this.placeCatalogService = placeCatalogService;
         this.idempotencyService = idempotencyService;
         this.icsFormatter = icsFormatter;
         this.clock = clock;
@@ -86,7 +86,7 @@ public class DatePlanService {
             return Collections.emptyList();
         }
         Set<UUID> placeIds = rows.stream().map(PlanRow::placeId).collect(java.util.stream.Collectors.toSet());
-        Map<UUID, PlaceSummary> places = placeQueryService.findPlaces(placeIds);
+        Map<UUID, PlaceSummary> places = placeCatalogService.findPlaces(placeIds);
         return rows.stream()
                 .map(row -> toDto(row, places.get(row.placeId()), DatePlan.ViewerRoleEnum.OWNER))
                 .toList();
@@ -137,12 +137,12 @@ public class DatePlanService {
         if (scheduledAt == null || !scheduledAt.isAfter(now)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thời điểm buổi hẹn phải ở tương lai");
         }
-        PlaceSummary place = placeQueryService.findPlace(placeId)
+        PlaceSummary place = placeCatalogService.findPlace(placeId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Địa điểm không tồn tại"));
         if (!place.isPublished()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Địa điểm hiện không khả dụng để lên kế hoạch");
         }
-        OpeningStatus openingStatus = placeQueryService.evaluateOpeningAt(placeId, place.hoursStatus(), scheduledAt);
+        OpeningStatus openingStatus = placeCatalogService.evaluateOpeningAt(placeId, place.hoursStatus(), scheduledAt);
         if (openingStatus == OpeningStatus.CLOSED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Địa điểm đóng cửa vào thời điểm đã chọn");
         }
@@ -169,7 +169,7 @@ public class DatePlanService {
 
     public DatePlan getPlan(UUID planId) {
         ViewerPlanAccess access = resolveViewerAccess(planId);
-        PlaceSummary place = placeQueryService.findPlace(access.plan().placeId())
+        PlaceSummary place = placeCatalogService.findPlace(access.plan().placeId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Địa điểm không tồn tại"));
         return toDto(access.plan(), place, access.viewerRole());
     }
@@ -188,7 +188,7 @@ public class DatePlanService {
 
         UUID targetPlaceId = req.getPlaceId() != null ? req.getPlaceId() : plan.placeId();
         boolean placeChanged = !targetPlaceId.equals(plan.placeId());
-        PlaceSummary place = placeQueryService.findPlace(targetPlaceId)
+        PlaceSummary place = placeCatalogService.findPlace(targetPlaceId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Địa điểm không tồn tại"));
         if (placeChanged && !place.isPublished()) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Không thể đổi sang địa điểm đang bị ẩn hoặc ngừng hoạt động");
@@ -200,7 +200,7 @@ public class DatePlanService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thời điểm buổi hẹn mới phải ở tương lai");
         }
         if (placeChanged || timeChanged) {
-            OpeningStatus opening = placeQueryService.evaluateOpeningAt(targetPlaceId, place.hoursStatus(), targetScheduledAt);
+            OpeningStatus opening = placeCatalogService.evaluateOpeningAt(targetPlaceId, place.hoursStatus(), targetScheduledAt);
             if (opening == OpeningStatus.CLOSED) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "Địa điểm đóng cửa vào thời điểm đã chọn");
             }
@@ -281,14 +281,14 @@ public class DatePlanService {
                 .param("planId", planId)
                 .update();
 
-        PlaceSummary place = placeQueryService.findPlace(updated.placeId())
+        PlaceSummary place = placeCatalogService.findPlace(updated.placeId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Địa điểm không tồn tại"));
         return toDto(updated, place, DatePlan.ViewerRoleEnum.OWNER);
     }
 
     public String formatCalendar(UUID planId) {
         ViewerPlanAccess access = resolveViewerAccess(planId);
-        PlaceSummary place = placeQueryService.findPlace(access.plan().placeId())
+        PlaceSummary place = placeCatalogService.findPlace(access.plan().placeId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Địa điểm không tồn tại"));
         return icsFormatter.formatEvent(
                 access.plan().id(),
@@ -490,7 +490,7 @@ public class DatePlanService {
     }
 
     private ViewerPlanAccess resolveViewerAccess(UUID planId) {
-        Optional<UserPrincipal> userOpt = actorResolver.findAuthenticatedUser(false);
+        Optional<UserPrincipal> userOpt = actorResolver.findAuthenticatedUser();
         Optional<RecipientPrincipal> recipientOpt = actorResolver.findRecipientPrincipal();
 
         Optional<PlanRow> planOpt = jdbc.sql("""

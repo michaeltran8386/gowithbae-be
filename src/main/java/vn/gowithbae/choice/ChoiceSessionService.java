@@ -42,8 +42,8 @@ import vn.gowithbae.common.IdempotencyService;
 import vn.gowithbae.common.TimeHelper;
 import vn.gowithbae.common.TokenHashUtil;
 import vn.gowithbae.plan.DatePlanService;
-import vn.gowithbae.shared.PlaceQueryService;
-import vn.gowithbae.shared.PlaceQueryService.PlaceSummary;
+import vn.gowithbae.shared.PlaceCatalogService;
+import vn.gowithbae.shared.PlaceCatalogService.PlaceSummary;
 
 /** Nghiệp vụ phiên cùng chọn, bỏ phiếu, cấp/thu hồi link mời và chốt thành kế hoạch (FR-10..14, RULE-08..12). */
 @Service
@@ -53,7 +53,7 @@ public class ChoiceSessionService {
 
     private final JdbcClient jdbc;
     private final ActorResolver actorResolver;
-    private final PlaceQueryService placeQueryService;
+    private final PlaceCatalogService placeCatalogService;
     private final IdempotencyService idempotencyService;
     private final DatePlanService datePlanService;
     private final Clock clock;
@@ -61,13 +61,13 @@ public class ChoiceSessionService {
     public ChoiceSessionService(
             JdbcClient jdbc,
             ActorResolver actorResolver,
-            PlaceQueryService placeQueryService,
+            PlaceCatalogService placeCatalogService,
             IdempotencyService idempotencyService,
             DatePlanService datePlanService,
             Clock clock) {
         this.jdbc = jdbc;
         this.actorResolver = actorResolver;
-        this.placeQueryService = placeQueryService;
+        this.placeCatalogService = placeCatalogService;
         this.idempotencyService = idempotencyService;
         this.datePlanService = datePlanService;
         this.clock = clock;
@@ -115,7 +115,7 @@ public class ChoiceSessionService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phiên cùng chọn phải gồm 2 đến 5 địa điểm khác nhau");
         }
 
-        Map<UUID, PlaceSummary> places = placeQueryService.findPlaces(placeIds);
+        Map<UUID, PlaceSummary> places = placeCatalogService.findPlaces(placeIds);
         if (places.size() != placeIds.size()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Có địa điểm không tồn tại");
         }
@@ -124,7 +124,7 @@ public class ChoiceSessionService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Địa điểm đã chọn hiện không khả dụng");
             }
         }
-        if (!placeQueryService.areAllPlacesSavedByUser(creator.userId(), placeIds)) {
+        if (!placeCatalogService.areAllPlacesSavedByUser(creator.userId(), placeIds)) {
             throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
                     "Chỉ được chọn các địa điểm đã lưu trong danh sách của bạn");
@@ -542,7 +542,7 @@ public class ChoiceSessionService {
                 .param("sid", sessionId)
                 .query(UUID.class)
                 .list();
-        Map<UUID, PlaceSummary> places = placeQueryService.findPlaces(placeIds);
+        Map<UUID, PlaceSummary> places = placeCatalogService.findPlaces(placeIds);
         List<PlaceCard> cards = new ArrayList<>(placeIds.size());
         for (UUID pid : placeIds) {
             PlaceSummary summary = places.get(pid);
@@ -586,7 +586,7 @@ public class ChoiceSessionService {
                 .list();
 
         Set<UUID> placeIds = candidateRows.stream().map(CandidateRow::placeId).collect(java.util.stream.Collectors.toSet());
-        Map<UUID, PlaceSummary> places = placeQueryService.findPlaces(placeIds);
+        Map<UUID, PlaceSummary> places = placeCatalogService.findPlaces(placeIds);
 
         Map<UUID, VotePreference> creatorVotes = new LinkedHashMap<>();
         Map<UUID, VotePreference> recipientVotes = new LinkedHashMap<>();
@@ -670,7 +670,7 @@ public class ChoiceSessionService {
     }
 
     private SessionViewerAccess resolveViewerAccess(UUID sessionId) {
-        Optional<UserPrincipal> userOpt = actorResolver.findAuthenticatedUser(false);
+        Optional<UserPrincipal> userOpt = actorResolver.findAuthenticatedUser();
         Optional<RecipientPrincipal> recipientOpt = actorResolver.findRecipientPrincipal();
 
         Optional<SessionRow> rowOpt = jdbc.sql("""

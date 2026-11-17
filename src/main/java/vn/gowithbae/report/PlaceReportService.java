@@ -1,10 +1,10 @@
 package vn.gowithbae.report;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -28,12 +28,16 @@ import vn.gowithbae.common.ActorResolver;
 import vn.gowithbae.common.ActorResolver.UserPrincipal;
 import vn.gowithbae.common.PageUtil;
 import vn.gowithbae.common.TimeHelper;
-import vn.gowithbae.shared.AuditService;
-import vn.gowithbae.shared.FileService;
-import vn.gowithbae.shared.PlaceQueryService;
-import vn.gowithbae.shared.PlaceQueryService.PlaceSummary;
+import vn.gowithbae.platform.AuditService;
+import vn.gowithbae.platform.RequestRateLimiter;
+import vn.gowithbae.shared.PlaceCatalogService;
+import vn.gowithbae.shared.PlaceCatalogService.PlaceSummary;
+import vn.gowithbae.shared.StoredFileLookup;
 
-/** Nghiệp vụ gửi báo sai địa điểm (ẩn danh/thành viên có chống lạm dụng) và xử lý báo sai cho Admin (FR-19, FR-28, RULE-18). */
+/**
+ * Nghiệp vụ gửi báo sai địa điểm (ẩn danh/thành viên dùng RequestRateLimiter của Người A)
+ * và xử lý báo sai phía Admin có ghi AuditService (FR-19, FR-28, RULE-18).
+ */
 @Service
 public class PlaceReportService {
 
@@ -41,66 +45,50 @@ public class PlaceReportService {
 
     private final JdbcClient jdbc;
     private final ActorResolver actorResolver;
-    private final PlaceQueryService placeQueryService;
-    private final FileService fileService;
+    private final PlaceCatalogService placeCatalogService;
+    private final StoredFileLookup storedFileLookup;
     private final AuditService auditService;
+    private final RequestRateLimiter rateLimiter;
 
     public PlaceReportService(
             JdbcClient jdbc,
             ActorResolver actorResolver,
-            PlaceQueryService placeQueryService,
-            FileService fileService,
-            AuditService auditService) {
+            PlaceCatalogService placeCatalogService,
+            StoredFileLookup storedFileLookup,
+            AuditService auditService,
+            RequestRateLimiter rateLimiter) {
         this.jdbc = jdbc;
         this.actorResolver = actorResolver;
-        this.placeQueryService = placeQueryService;
-        this.fileService = fileService;
+        this.placeCatalogService = placeCatalogService;
+        this.storedFileLookup = storedFileLookup;
         this.auditService = auditService;
+        this.rateLimiter = rateLimiter;
     }
 
     @Transactional
     public PlaceReportReceipt submitReport(UUID placeId, PlaceReportCreate req) {
-        PlaceSummary place = placeQueryService.findPlace(placeId)
+        PlaceSummary place = placeCatalogService.findPlace(placeId)
                 .filter(PlaceSummary::isPublished)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Địa điểm không tồn tại"));
 
-        Optional<UserPrincipal> userOpt = actorResolver.findAuthenticatedUser(true);
-        if (userOpt.isPresent() && !userOpt.get().isActive()) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Tài khoản đang bị khóa");
-        }
-
+        Optional<UserPrincipal> userOpt = actorResolver.findAuthenticatedUser();
         UUID senderUserId = userOpt.map(UserPrincipal::userId).orElse(null);
-        String fingerprint = actorResolver.resolveClientFingerprint();
 
-        Long recentCount = senderUserId != null
-                ? jdbc.sql("""
-                        SELECT COUNT(*) FROM place_report
-                        WHERE sender_user_id = :uid AND created_at > now() - interval '1 hour'
-                        """)
-                        .param("uid", senderUserId)
-                        .query(Long.class)
-                        .single()
-                : jdbc.sql("""
-                        SELECT COUNT(*) FROM place_report
-                        WHERE sender_fingerprint = :fp AND created_at > now() - interval '1 hour'
-                        """)
-                        .param("fp", fingerprint)
-                        .query(Long.class)
-                        .single();
-
-        if (recentCount != null && recentCount >= MAX_REPORTS_PER_HOUR) {
+        String peerKey = actorResolver.resolveClientPeerKey();
+        if (!rateLimiter.consume("place-report-peer", peerKey, MAX_REPORTS_PER_HOUR, Duration.ofHours(1))
+                || (senderUserId != null && !rateLimiter.consume(
+                        "place-report-user", senderUserId.toString(), MAX_REPORTS_PER_HOUR, Duration.ofHours(1)))) {
             throw new ResponseStatusException(
                     HttpStatus.TOO_MANY_REQUESTS,
                     "Bạn đã gửi quá nhiều báo sai trong thời gian ngắn, vui lòng thử lại sau 1 giờ");
         }
 
-        if (req.getFileId() != null) {
-            fileService.validateAttachments(senderUserId, List.of(req.getFileId()), "PLACE_REPORT", false);
-        }
+        storedFileLookup.validatePlaceReportFile(senderUserId, req.getFileId());
 
         String description = req.getDescription() == null || req.getDescription().isBlank()
                 ? null
                 : req.getDescription().trim();
+        String fingerprint = actorResolver.resolveClientFingerprint();
 
         PlaceReportReceiptRow inserted = jdbc.sql("""
                 INSERT INTO place_report(place_id, reason, description, file_id, sender_user_id, sender_fingerprint, status)
@@ -167,9 +155,9 @@ public class PlaceReportService {
 
         Set<UUID> fileIds = rows.stream()
                 .map(ReportRow::fileId)
-                .filter(Objects::nonNull)
+                .filter(java.util.Objects::nonNull)
                 .collect(java.util.stream.Collectors.toSet());
-        Map<UUID, StoredFile> files = fileService.getFiles(fileIds);
+        Map<UUID, StoredFile> files = storedFileLookup.getMetadata(fileIds);
 
         List<PlaceReport> items = rows.stream()
                 .map(r -> toDto(r, r.fileId() == null ? null : files.get(r.fileId())))
@@ -181,7 +169,7 @@ public class PlaceReportService {
     public PlaceReport adminGetReport(UUID reportId) {
         ReportRow row = findReportRow(reportId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy báo sai"));
-        StoredFile attachment = row.fileId() == null ? null : fileService.getFiles(List.of(row.fileId())).get(row.fileId());
+        StoredFile attachment = row.fileId() == null ? null : storedFileLookup.getMetadata(List.of(row.fileId())).get(row.fileId());
         return toDto(row, attachment);
     }
 
@@ -268,7 +256,7 @@ public class PlaceReportService {
                 note);
 
         StoredFile attachment = updated.fileId() == null ? null
-                : fileService.getFiles(List.of(updated.fileId())).get(updated.fileId());
+                : storedFileLookup.getMetadata(List.of(updated.fileId())).get(updated.fileId());
         return toDto(updated, attachment);
     }
 

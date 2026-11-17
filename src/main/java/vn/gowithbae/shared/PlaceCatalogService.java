@@ -26,24 +26,42 @@ import vn.gowithbae.api.model.Taxonomy;
 import vn.gowithbae.api.model.TaxonomyGroup;
 import vn.gowithbae.common.TimeHelper;
 
-/** Cài đặt đọc địa điểm, danh sách đã lưu và đối chiếu giờ mở cửa (RULE-05). */
+/**
+ * Truy vấn đọc địa điểm, danh sách đã lưu và giờ mở cửa phục vụ các module của Người C
+ * (giữ tách biệt khỏi bean vn.gowithbae.platform.PlaceQueryService mà Người B sẽ cung cấp).
+ */
 @Service
-public class JdbcPlaceQueryService implements PlaceQueryService {
+public class PlaceCatalogService {
 
-    private final JdbcClient jdbc;
-    private final JdbcFileService fileService;
-
-    public JdbcPlaceQueryService(JdbcClient jdbc, JdbcFileService fileService) {
-        this.jdbc = jdbc;
-        this.fileService = fileService;
+    public enum OpeningStatus {
+        OPEN,
+        CLOSED,
+        UNKNOWN
     }
 
-    @Override
+    public record PlaceSummary(
+            UUID id,
+            String name,
+            String address,
+            String status,
+            String hoursStatus,
+            PlaceCard card) {
+
+        public boolean isPublished() {
+            return "PUBLISHED".equals(status);
+        }
+    }
+
+    private final JdbcClient jdbc;
+
+    public PlaceCatalogService(JdbcClient jdbc) {
+        this.jdbc = jdbc;
+    }
+
     public Optional<PlaceSummary> findPlace(UUID placeId) {
         return Optional.ofNullable(findPlaces(List.of(placeId)).get(placeId));
     }
 
-    @Override
     public Map<UUID, PlaceSummary> findPlaces(Collection<UUID> placeIds) {
         if (placeIds == null || placeIds.isEmpty()) {
             return Collections.emptyMap();
@@ -52,14 +70,11 @@ public class JdbcPlaceQueryService implements PlaceQueryService {
         List<PlaceSummary> rows = jdbc.sql("""
                 SELECT p.id, p.name, p.address, p.status, p.hours_status, p.lat, p.lng,
                        a.name AS area_name,
-                       sf.storage_key AS cover_key,
                        COALESCE(pp.status, 'UNKNOWN') AS price_status,
                        pp.standard_for_two, pp.min_price, pp.max_price, pp.includes, pp.verified_at AS price_verified_at
                 FROM place p
                 JOIN area a ON a.id = p.area_id
                 LEFT JOIN place_price pp ON pp.place_id = p.id
-                LEFT JOIN place_image pi ON pi.place_id = p.id AND pi.is_cover = true
-                LEFT JOIN stored_file sf ON sf.id = pi.file_id
                 WHERE p.id IN (:ids)
                 """)
                 .param("ids", distinctIds)
@@ -73,7 +88,7 @@ public class JdbcPlaceQueryService implements PlaceQueryService {
                     UUID id = rs.getObject("id", UUID.class);
                     PlaceCard card = new PlaceCard(id, rs.getString("name"), price, new ArrayList<>())
                             .areaName(rs.getString("area_name"))
-                            .coverUrl(fileService.resolveUri(rs.getString("cover_key")))
+                            .coverUrl(null)
                             .lat(rs.getObject("lat", Double.class))
                             .lng(rs.getObject("lng", Double.class));
                     return new PlaceSummary(
@@ -119,7 +134,6 @@ public class JdbcPlaceQueryService implements PlaceQueryService {
         return byId;
     }
 
-    @Override
     public boolean areAllPlacesSavedByUser(UUID userId, Set<UUID> placeIds) {
         if (placeIds == null || placeIds.isEmpty()) {
             return false;
@@ -137,7 +151,6 @@ public class JdbcPlaceQueryService implements PlaceQueryService {
         return count != null && count == placeIds.size();
     }
 
-    @Override
     public OpeningStatus evaluateOpeningAt(UUID placeId, String hoursStatus, OffsetDateTime scheduledAt) {
         ZonedDateTime vnTime = TimeHelper.inVietnam(scheduledAt);
         LocalDate date = vnTime.toLocalDate();
@@ -166,7 +179,7 @@ public class JdbcPlaceQueryService implements PlaceQueryService {
         return evaluateOpeningRules(hoursStatus, vnTime, exceptions, prevWeekly, todayWeekly);
     }
 
-    static OpeningStatus evaluateOpeningRules(
+    public static OpeningStatus evaluateOpeningRules(
             String hoursStatus,
             ZonedDateTime vnTime,
             List<ExceptionRow> exceptions,
@@ -244,7 +257,7 @@ public class JdbcPlaceQueryService implements PlaceQueryService {
         return !closesAt.isAfter(opensAt) && !time.isAfter(closesAt);
     }
 
-    record ExceptionRow(LocalDate onDate, boolean closed, @Nullable LocalTime opensAt, @Nullable LocalTime closesAt) {}
+    public record ExceptionRow(LocalDate onDate, boolean closed, @Nullable LocalTime opensAt, @Nullable LocalTime closesAt) {}
 
-    record TimeWindow(LocalTime opensAt, LocalTime closesAt) {}
+    public record TimeWindow(LocalTime opensAt, LocalTime closesAt) {}
 }

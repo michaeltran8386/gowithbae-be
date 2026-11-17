@@ -12,6 +12,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.server.ResponseStatusException;
 
 import tools.jackson.databind.json.JsonMapper;
@@ -28,14 +29,13 @@ import vn.gowithbae.common.PageUtil;
 import vn.gowithbae.common.TimeHelper;
 import vn.gowithbae.plan.DatePlanService;
 import vn.gowithbae.plan.IcsCalendarFormatter;
-import vn.gowithbae.report.PlaceReportService;
-import vn.gowithbae.shared.AuditService;
-import vn.gowithbae.shared.FileService;
-import vn.gowithbae.shared.NotificationService;
-import vn.gowithbae.shared.PlaceQueryService;
+import vn.gowithbae.platform.AuditService;
+import vn.gowithbae.platform.NotificationService;
+import vn.gowithbae.shared.PlaceCatalogService;
+import vn.gowithbae.shared.StoredFileLookup;
 import vn.gowithbae.support.SupportService;
 
-/** Kiểm tra biên tham số và tiện ích phân trang của Người 3 (không cần DB/Docker). */
+/** Kiểm tra biên tham số và tiện ích phân trang của Người 3 trên platform của Người A (không cần DB/Docker). */
 class PersonCServiceStateTest {
 
     private static final Clock FIXED_CLOCK = Clock.fixed(Instant.parse("2026-12-20T10:00:00Z"), TimeHelper.VN_ZONE);
@@ -58,13 +58,12 @@ class PersonCServiceStateTest {
     void choiceSessionRejectsInvalidCandidateCountBeforeQueryingDb() {
         ActorResolver actorResolver = mock(ActorResolver.class);
         when(actorResolver.requireActiveUser()).thenReturn(new UserPrincipal(UUID.randomUUID(), "Minh", "ACTIVE"));
-
         IdempotencyService passThroughIdempotency = new IdempotencyService(mock(JdbcClient.class), JsonMapper.builder().build());
 
         ChoiceSessionService service = new ChoiceSessionService(
                 mock(JdbcClient.class),
                 actorResolver,
-                mock(PlaceQueryService.class),
+                mock(PlaceCatalogService.class),
                 passThroughIdempotency,
                 mock(DatePlanService.class),
                 FIXED_CLOCK);
@@ -87,13 +86,12 @@ class PersonCServiceStateTest {
     void directDatePlanRejectsPastOrCurrentScheduledAt() {
         ActorResolver actorResolver = mock(ActorResolver.class);
         when(actorResolver.requireActiveUser()).thenReturn(new UserPrincipal(UUID.randomUUID(), "Minh", "ACTIVE"));
-
         IdempotencyService passThroughIdempotency = new IdempotencyService(mock(JdbcClient.class), JsonMapper.builder().build());
 
         DatePlanService service = new DatePlanService(
                 mock(JdbcClient.class),
                 actorResolver,
-                mock(PlaceQueryService.class),
+                mock(PlaceCatalogService.class),
                 passThroughIdempotency,
                 new IcsCalendarFormatter(),
                 FIXED_CLOCK);
@@ -116,9 +114,10 @@ class PersonCServiceStateTest {
         SupportService service = new SupportService(
                 mock(JdbcClient.class),
                 actorResolver,
-                mock(FileService.class),
+                mock(StoredFileLookup.class),
                 mock(AuditService.class),
-                mock(NotificationService.class));
+                mock(NotificationService.class),
+                mock(PlatformTransactionManager.class));
 
         SupportTicketCreate blankSubject = new SupportTicketCreate(
                 SupportTicketCreate.CategoryEnum.OTHER,

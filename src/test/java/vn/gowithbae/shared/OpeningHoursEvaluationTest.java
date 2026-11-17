@@ -10,16 +10,16 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import vn.gowithbae.common.TimeHelper;
-import vn.gowithbae.shared.JdbcPlaceQueryService.ExceptionRow;
-import vn.gowithbae.shared.JdbcPlaceQueryService.TimeWindow;
-import vn.gowithbae.shared.PlaceQueryService.OpeningStatus;
+import vn.gowithbae.shared.PlaceCatalogService.ExceptionRow;
+import vn.gowithbae.shared.PlaceCatalogService.OpeningStatus;
+import vn.gowithbae.shared.PlaceCatalogService.TimeWindow;
 
 class OpeningHoursEvaluationTest {
 
     @Test
     void closedDateExceptionOverridesOpenWeeklySchedule() {
         ZonedDateTime target = ZonedDateTime.of(2026, 12, 25, 19, 0, 0, 0, TimeHelper.VN_ZONE);
-        OpeningStatus status = JdbcPlaceQueryService.evaluateOpeningRules(
+        OpeningStatus status = PlaceCatalogService.evaluateOpeningRules(
                 "KNOWN",
                 target,
                 List.of(new ExceptionRow(LocalDate.of(2026, 12, 25), true, null, null)),
@@ -32,7 +32,7 @@ class OpeningHoursEvaluationTest {
     @Test
     void overnightShiftFromPreviousDayKeepsEarlyMorningOpen() {
         ZonedDateTime saturday1am = ZonedDateTime.of(2026, 12, 26, 1, 0, 0, 0, TimeHelper.VN_ZONE);
-        OpeningStatus status = JdbcPlaceQueryService.evaluateOpeningRules(
+        OpeningStatus status = PlaceCatalogService.evaluateOpeningRules(
                 "KNOWN",
                 saturday1am,
                 List.of(),
@@ -45,7 +45,7 @@ class OpeningHoursEvaluationTest {
     @Test
     void unknownHoursReturnsUnknownWhenNoExceptionBlocksDay() {
         ZonedDateTime target = ZonedDateTime.of(2026, 12, 25, 19, 0, 0, 0, TimeHelper.VN_ZONE);
-        OpeningStatus status = JdbcPlaceQueryService.evaluateOpeningRules(
+        OpeningStatus status = PlaceCatalogService.evaluateOpeningRules(
                 "UNKNOWN",
                 target,
                 List.of(),

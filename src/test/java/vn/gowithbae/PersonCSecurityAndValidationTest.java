@@ -24,6 +24,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -48,10 +49,11 @@ import vn.gowithbae.api.model.DateReminderState;
 import vn.gowithbae.api.model.PageMeta;
 import vn.gowithbae.api.model.PlaceReportPage;
 import vn.gowithbae.api.model.SupportTicketPage;
+import vn.gowithbae.auth.DatabaseJwtAuthenticationConverter;
 import vn.gowithbae.common.ApiExceptionHandler;
 import vn.gowithbae.config.SecurityConfig;
 
-/** Kiểm tra Spring SecurityConfig, Bean Validation và RFC 9457 Problem cho các endpoint Người 3 (không cần Docker). */
+/** Kiểm tra Spring SecurityConfig (sau khi ghép với Người A), Bean Validation và RFC 9457 Problem cho các endpoint Người 3. */
 @WebMvcTest(controllers = {
         ChoiceSessionsApiController.class,
         ShareGrantsApiController.class,
@@ -71,6 +73,8 @@ class PersonCSecurityAndValidationTest {
     @Autowired
     private MockMvc mvc;
 
+    @MockitoBean JdbcClient jdbc;
+    @MockitoBean DatabaseJwtAuthenticationConverter databaseJwtAuthenticationConverter;
     @MockitoBean ChoiceSessionsApiDelegate choiceSessionsDelegate;
     @MockitoBean ShareGrantsApiDelegate shareGrantsDelegate;
     @MockitoBean DatePlansApiDelegate datePlansDelegate;
@@ -102,17 +106,20 @@ class PersonCSecurityAndValidationTest {
     }
 
     @Test
-    void privateMemberEndpointsRequireAuthentication() throws Exception {
+    void privateMemberEndpointsRequireAuthenticationWithProblemJson() throws Exception {
         mvc.perform(post("/api/v1/date-plans")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"placeId\":\"" + UUID.randomUUID() + "\",\"scheduledAt\":\"2027-01-01T19:00:00+07:00\"}"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isUnauthorized())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
 
         mvc.perform(get("/api/v1/me/places/{placeId}/visit-count", UUID.randomUUID()))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isUnauthorized())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
 
         mvc.perform(get("/api/v1/support-tickets"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isUnauthorized())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
     }
 
     @Test
@@ -124,7 +131,8 @@ class PersonCSecurityAndValidationTest {
 
         mvc.perform(get("/api/v1/admin/place-reports")
                         .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_SUPPORT"))))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
 
         mvc.perform(get("/api/v1/admin/place-reports")
                         .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_REVIEWER"))))
@@ -132,7 +140,8 @@ class PersonCSecurityAndValidationTest {
 
         mvc.perform(get("/api/v1/admin/support-tickets")
                         .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_REVIEWER"))))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
 
         mvc.perform(get("/api/v1/admin/support-tickets")
                         .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_SUPPORT"))))

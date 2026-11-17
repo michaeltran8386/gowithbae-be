@@ -11,11 +11,16 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import vn.gowithbae.api.model.AdminReplyTicketRequest;
@@ -33,31 +38,40 @@ import vn.gowithbae.common.ActorResolver;
 import vn.gowithbae.common.ActorResolver.UserPrincipal;
 import vn.gowithbae.common.PageUtil;
 import vn.gowithbae.common.TimeHelper;
-import vn.gowithbae.shared.AuditService;
-import vn.gowithbae.shared.FileService;
-import vn.gowithbae.shared.NotificationService;
+import vn.gowithbae.platform.AuditService;
+import vn.gowithbae.platform.NotificationService;
+import vn.gowithbae.shared.StoredFileLookup;
 
-/** Nghiệp vụ yêu cầu hỗ trợ (thành viên và nhân sự hỗ trợ) tách bạch PUBLIC/INTERNAL (FR-20, FR-29, RULE-19, OQ-13). */
+/**
+ * Nghiệp vụ yêu cầu hỗ trợ (thành viên và nhân sự hỗ trợ) tách bạch PUBLIC/INTERNAL,
+ * dùng AuditService, NotificationService và FileService từ vn.gowithbae.platform của Người A.
+ */
 @Service
 public class SupportService {
 
+    private static final Logger log = LoggerFactory.getLogger(SupportService.class);
+
     private final JdbcClient jdbc;
     private final ActorResolver actorResolver;
-    private final FileService fileService;
+    private final StoredFileLookup storedFileLookup;
     private final AuditService auditService;
     private final NotificationService notificationService;
+    private final TransactionTemplate requiresNewTx;
 
     public SupportService(
             JdbcClient jdbc,
             ActorResolver actorResolver,
-            FileService fileService,
+            StoredFileLookup storedFileLookup,
             AuditService auditService,
-            NotificationService notificationService) {
+            NotificationService notificationService,
+            PlatformTransactionManager txManager) {
         this.jdbc = jdbc;
         this.actorResolver = actorResolver;
-        this.fileService = fileService;
+        this.storedFileLookup = storedFileLookup;
         this.auditService = auditService;
         this.notificationService = notificationService;
+        this.requiresNewTx = new TransactionTemplate(txManager);
+        this.requiresNewTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     public List<SupportTicket> listMyTickets() {
@@ -85,7 +99,7 @@ public class SupportService {
         }
 
         List<UUID> fileIds = normalizeFileIds(req.getFileIds());
-        fileService.validateAttachments(user.userId(), fileIds, "SUPPORT", true);
+        storedFileLookup.validateSupportFiles(user.userId(), fileIds);
 
         TicketRow ticket = jdbc.sql("""
                 INSERT INTO support_ticket(owner_id, category, subject, status)
@@ -140,7 +154,6 @@ public class SupportService {
                 .optional()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy yêu cầu hỗ trợ"));
 
-        // OQ-13 (đã chốt với user): Ticket CLOSED không cho thành viên gửi phản hồi thêm.
         if ("CLOSED".equals(ticket.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Yêu cầu hỗ trợ đã đóng, không thể phản hồi thêm");
         }
@@ -150,7 +163,7 @@ public class SupportService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nội dung phản hồi không được để trống");
         }
         List<UUID> fileIds = normalizeFileIds(req.getFileIds());
-        fileService.validateAttachments(user.userId(), fileIds, "SUPPORT", true);
+        storedFileLookup.validateSupportFiles(user.userId(), fileIds);
 
         SupportMessage message = insertMessage(ticket.id(), user.userId(), user.displayName(), false,
                 MessageVisibility.PUBLIC, body, fileIds);
@@ -230,7 +243,7 @@ public class SupportService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Nội dung phản hồi không được để trống");
         }
         List<UUID> fileIds = normalizeFileIds(req.getFileIds());
-        fileService.validateAttachments(admin.userId(), fileIds, "SUPPORT", true);
+        storedFileLookup.validateSupportFiles(admin.userId(), fileIds);
 
         boolean isPublic = req.getVisibility() == MessageVisibility.PUBLIC;
         SupportMessage message = insertMessage(ticket.id(), admin.userId(), admin.displayName(), true,
@@ -248,9 +261,9 @@ public class SupportService {
 
         // Chỉ gửi thông báo cho khách khi phản hồi PUBLIC; không bao giờ gửi hoặc lộ ghi chú INTERNAL (AC-049/050).
         if (isPublic && !ticket.ownerId().equals(admin.userId())) {
-            notificationService.notify(
+            safeNotify(
                     ticket.ownerId(),
-                    "SUPPORT_REPLIED",
+                    NotificationService.Type.SUPPORT_REPLIED,
                     "SUPPORT_TICKET",
                     ticketId,
                     "Yêu cầu hỗ trợ có phản hồi mới: " + ticket.subject());
@@ -264,7 +277,6 @@ public class SupportService {
         UserPrincipal admin = actorResolver.requireActiveUser();
         TicketRow before = lockTicketById(ticketId);
 
-        // OQ-13 (đã chốt với user): Admin không mở lại từ CLOSED.
         if ("CLOSED".equals(before.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Yêu cầu hỗ trợ đã đóng, không thể mở lại");
         }
@@ -313,9 +325,9 @@ public class SupportService {
                 null);
 
         if (!before.status().equals(updated.status())) {
-            notificationService.notify(
+            safeNotify(
                     updated.ownerId(),
-                    "SUPPORT_STATUS_CHANGED",
+                    NotificationService.Type.SUPPORT_STATUS_CHANGED,
                     "SUPPORT_TICKET",
                     ticketId,
                     "Yêu cầu hỗ trợ chuyển sang trạng thái " + updated.status());
@@ -323,6 +335,21 @@ public class SupportService {
 
         List<SupportMessage> messages = loadMessages(updated.id(), updated.ownerId(), true);
         return toTicketDetail(updated, messages);
+    }
+
+    /** Ghi thông báo ở transaction độc lập (REQUIRES_NEW) để lỗi phụ không làm rollback kết quả đã lưu (EX-04). */
+    private void safeNotify(
+            UUID recipientId,
+            NotificationService.Type type,
+            String objectType,
+            UUID objectId,
+            String summary) {
+        try {
+            requiresNewTx.executeWithoutResult(status ->
+                    notificationService.notify(recipientId, type, objectType, objectId, summary));
+        } catch (RuntimeException ex) {
+            log.warn("Notification side effect failed for recipient={} type={}", recipientId, type, ex);
+        }
     }
 
     private SupportMessage insertMessage(
@@ -356,7 +383,7 @@ public class SupportService {
                         .param("fid", fid)
                         .update();
             }
-            Map<UUID, StoredFile> fileMap = fileService.getFiles(fileIds);
+            Map<UUID, StoredFile> fileMap = storedFileLookup.getMetadata(fileIds);
             attachments = fileIds.stream().map(fileMap::get).filter(java.util.Objects::nonNull).toList();
         }
 
@@ -402,7 +429,7 @@ public class SupportService {
                 .list();
 
         Set<UUID> allFileIds = links.stream().map(MessageFileLink::fileId).collect(java.util.stream.Collectors.toSet());
-        Map<UUID, StoredFile> filesById = fileService.getFiles(allFileIds);
+        Map<UUID, StoredFile> filesById = storedFileLookup.getMetadata(allFileIds);
 
         Map<UUID, List<StoredFile>> attachmentsByMessage = new LinkedHashMap<>();
         for (MessageFileLink link : links) {
