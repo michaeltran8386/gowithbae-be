@@ -1,6 +1,8 @@
+**Cập nhật người A ngày 17-11-2026:** xem [MEMBER_A.md](MEMBER_A.md) cho trạng thái implement, SMTP/MFA và giao tiếp B/C. Các ví dụ khung bên dưới không thay bản trạng thái này.
+
 # Hướng dẫn làm việc — Backend GoWithBae G1
 
-Đọc kèm: [`api/openapi.yaml`](../api/openapi.yaml) (contract 0.2.0), [SRS hợp nhất v1.2](SRS.md) từ `GWB-REQ-G1` v1.1/CR-001, và hướng dẫn frontend `gowithbae-fe/docs/DEVELOPMENT.md`.
+Đọc kèm: [`api/openapi.yaml`](../api/openapi.yaml) (contract 0.3.0), [SRS hợp nhất v1.3](SRS.md) từ `GWB-REQ-G1` v1.1/CR-001, và hướng dẫn frontend `gowithbae-fe/docs/DEVELOPMENT.md`.
 
 ## 1. Bức tranh tổng thể
 
@@ -33,7 +35,7 @@ gowithbae-fe (React)  ──HTTP /api/v1──▶  gowithbae-be (Spring Boot)  �
 
 ### 2.2 Bảo mật Supabase — bắt buộc làm
 
-Supabase mặc định mở schema `public` qua Data API (PostgREST) cho bất kỳ ai có `anon key`. Bảng của ta nằm ở `public` và **không bật RLS**, nên nếu để mặc định, dữ liệu riêng tư (email, kế hoạch, phiếu…) có thể bị đọc thẳng qua REST mà không qua Spring.
+Các bảng public của dự án đã bật RLS qua V3/V4/V100/V101. Không bỏ RLS hoặc expose bảng mới qua Data API: đường truy cập nghiệp vụ là Spring; vẫn kiểm tra cấu hình dashboard của project.
 
 Hai lớp chặn, làm cả hai:
 
@@ -236,7 +238,7 @@ Contract đổi thì FE chạy `npm run gen:api`. Ghi rõ trong commit/PR operat
 - Người dùng đăng nhập bằng email OTP (`/auth/otp/*`); backend tự phát JWT HS256.
 - Claim: `sub` = `app_user.id`, `roles` = danh sách vai trò (`MEMBER`, `EDITOR`, `REVIEWER`, `SUPPORT`, `SUPER_ADMIN`), `sid` = `access_session.id`.
 - Spring map `roles` thành `ROLE_*`; dùng `hasRole("REVIEWER")` hoặc kiểm tra trong delegate.
-- **Chưa làm:** phát JWT sau OTP và kiểm tra `sid` chưa bị thu hồi mỗi request. Phải xong trước khi có dữ liệu thật (FR-22, RULE-12).
+- **Đã implement A:** phát JWT sau OTP, kiểm tra sid/expiry/trạng thái mỗi request và quyền từ DB. Nhân viên cần email OTP + TOTP; xem MEMBER_A.md. Test dùng TestJwtFactory tạo phiên DB thật, không tự ký token thiếu sid/issuer/amr.
 - Người nhận link không có tài khoản: dùng header `X-Recipient-Session`; token chỉ lưu dạng hash trong `recipient_session.token_hash`.
 
 ## 7. Lệnh thường dùng
@@ -265,7 +267,7 @@ Contract đổi thì FE chạy `npm run gen:api`. Ghi rõ trong commit/PR operat
 
 ## CR-001: endpoint, database và nghiệm thu
 
-Nguồn hiện hành: SRS hợp nhất v1.2 (Requirements v1.1), §4/7/13/17. Ba hành vi đã CONF không hỏi lại; actor xác nhận, sửa lượt và nhắc lại sau đổi giờ còn OQ-10/25.
+Nguồn hiện hành: SRS hợp nhất v1.3 (Requirements v1.1), §4/7/13/17. Ba hành vi đã CONF không hỏi lại; actor xác nhận, sửa lượt và nhắc lại sau đổi giờ còn OQ-10/25.
 
 | Endpoint | Ý nghĩa | Trạng thái khung |
 |---|---|---|

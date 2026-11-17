@@ -4,11 +4,13 @@ Backend GoWithBae G1: Spring Boot 4.1 · Java 21 · PostgreSQL (Supabase) · Fly
 
 **Yêu cầu sản phẩm:** [SRS hợp nhất G1](docs/SRS.md) — Draft, giữ đầy đủ câu hỏi mở và đề xuất chờ duyệt.
 
+**Triển khai người A:** [docs/MEMBER_A.md](docs/MEMBER_A.md) (quyết định OQ, SMTP/TOTP, interface B/C).
+
 **Hướng dẫn làm việc (Supabase, quy trình endpoint, migration):** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · **Tech stack:** [TECHSTACK.md](TECHSTACK.md)
 
 ## API contract
 
-`api/openapi.yaml` là **nguồn chuẩn duy nhất** cho FE và BE (OpenAPI 3.0, contract 0.2.0, phủ FR-01..FR-35 của `GWB-REQ-G1` v1.1/CR-001; SRS hợp nhất v1.2).
+`api/openapi.yaml` là **nguồn chuẩn duy nhất** cho FE và BE (OpenAPI 3.0, contract 0.3.0, phủ FR-01..FR-35 của `GWB-REQ-G1` v1.1/CR-001; SRS hợp nhất v1.3).
 
 - `x-status: draft` + `x-oq`: hành vi phụ thuộc câu hỏi mở trong SRS §13. Hỏi PO trước khi implement, không tự chốt chính sách.
 - Build sinh code vào `target/generated-sources/openapi` (package `vn.gowithbae.api`):
@@ -45,8 +47,10 @@ src/main/resources/db/migration
 
 ## Đã có / chưa có
 
-Đã có: schema khung, route cho mọi endpoint, xác thực JWT, `GET /places` (từ khóa không dấu, khu vực, ngân sách, sắp xếp mặc định/giá). CR-001 bổ sung contract số lần đã đi/lời nhắc và preview các địa điểm trước join; các operation mới vẫn trả 501 cho tới khi implement delegate.
+Đã có: khung G1, GET /places mẫu và các module A: email OTP/JWT/logout/hồ sơ/đổi email/yêu cầu xóa, danh sách lưu, inbox, upload PNG/JPEG riêng tư, analytics, admin users/audit/report/CSV. Có kiểm tra sid hiện hành và TOTP cho nhân viên. Xem docs/MEMBER_A.md để biết quyết định và cấu hình.
 
-Chưa có: OTP/phát JWT, kiểm tra thu hồi phiên `sid`, lọc nhãn/giờ/vị trí, các endpoint còn lại, email/bản đồ/lưu tệp, rate limit.
+B/C chưa implement trong lần này. PlaceQueryService của B chưa có: thêm nơi mới và detail list có item trả501 rõ ràng. StatisticsContributor và AccountLifecycleParticipant cần B/C nối; không giả thống kê hoặc query chéo bảng. FR-35 trong tag Me vẫn thuộc C. Không có URL download tệp công khai.
 
-V4 không tự xóa lượt đi trùng có sẵn. Nếu migration báo unique conflict, kiểm tra dữ liệu và chính sách OQ-10/25 trước khi xử lý. Không sửa V1–V3 đã phát hành.
+SMTP cần cấu hình thật; nhân viên cần provisioning TOTP. Retention/purge production, backup, provider triển khai và dữ liệu Supabase thật chưa được kiểm chứng. Không gọi đây là bản phát hành production.
+
+V4 không tự xóa lượt đi trùng có sẵn. V100/V101 là migration của A; không sửa migration đã phát hành. Phối hợp thứ tự với khoảng V200 của B/V300 của C để tránh bỏ qua version thấp.

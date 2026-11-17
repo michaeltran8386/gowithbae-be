@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: GoWithBae G1 API
-  version: 0.2.0
+  version: 0.3.0
   description: |
     API contract cho GoWithBae G1 (web khách hàng + quản trị nội bộ).
     Nguồn yêu cầu: `GWB-REQ-G1` v1.1 (15-11-2026), SRS hợp nhất v1.2 và CR-001.
@@ -274,6 +274,7 @@ paths:
               properties:
                 email: { type: string, format: email, maxLength: 254 }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '202': { description: Accepted }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -282,6 +283,7 @@ paths:
       tags: [Auth]
       operationId: verifyOtp
       summary: Xác minh mã, tạo tài khoản nếu chưa có, cấp phiên (FR-07, RULE-16)
+      description: 'Nhân viên cần thêm staffCode từ TOTP đã provisioning tin cậy (quyết định triển khai A cho NFR-05). Tài khoản thường không cần trường này. Secret TOTP không cấp qua API đăng nhập.'
       x-status: draft
       x-oq: [OQ-06]
       requestBody:
@@ -294,7 +296,9 @@ paths:
               properties:
                 email: { type: string, format: email }
                 code: { type: string, pattern: '^[0-9]{6}$' }
+                staffCode: { type: string, pattern: '^[0-9]{6}$', description: 'Mã TOTP của nhân viên, bắt buộc khi tài khoản có vai trò nội bộ.' }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -310,6 +314,7 @@ paths:
       summary: Thu hồi phiên hiện tại (FR-08)
       security: [{ bearerAuth: [] }]
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '204': { description: No Content }
 
   # ───────────────────────── Me ─────────────────────────
@@ -319,6 +324,7 @@ paths:
       operationId: getMe
       security: [{ bearerAuth: [] }]
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -336,6 +342,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UserUpdate' }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -359,6 +366,7 @@ paths:
               properties:
                 newEmail: { type: string, format: email, maxLength: 254 }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '202': { description: Accepted }
         '400': { $ref: '#/components/responses/BadRequest' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
@@ -397,6 +405,7 @@ paths:
               properties:
                 code: { type: string, pattern: '^[0-9]{6}$' }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -412,6 +421,7 @@ paths:
       x-oq: [OQ-17]
       security: [{ bearerAuth: [] }]
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '202': { description: Accepted — chưa có nghĩa là đã xóa dữ liệu }
 
   # ───────────────────────── Saved lists ─────────────────────────
@@ -421,6 +431,7 @@ paths:
       operationId: listSavedLists
       security: [{ bearerAuth: [] }]
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -438,6 +449,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/SavedListWrite' }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '201':
           description: Created
           content:
@@ -452,6 +464,7 @@ paths:
       summary: Danh sách và địa điểm; nơi đã ẩn giữ tên + cảnh báo (FR-09)
       security: [{ bearerAuth: [] }]
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -468,6 +481,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/SavedListWrite' }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -480,6 +494,7 @@ paths:
       summary: Xóa danh sách; không xóa địa điểm/kế hoạch (RULE-07)
       security: [{ bearerAuth: [] }]
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '204': { description: No Content }
         '404': { $ref: '#/components/responses/NotFound' }
   /saved-lists/{listId}/places/{placeId}:
@@ -492,6 +507,7 @@ paths:
       summary: Thêm địa điểm, idempotent — thêm lặp không tạo bản ghi mới (RULE-07)
       security: [{ bearerAuth: [] }]
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '204': { description: No Content }
         '404': { $ref: '#/components/responses/NotFound' }
     delete:
@@ -499,6 +515,7 @@ paths:
       operationId: removePlaceFromList
       security: [{ bearerAuth: [] }]
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '204': { description: No Content }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -968,6 +985,7 @@ paths:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/Size'
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -986,6 +1004,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '204': { description: No Content }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -1009,6 +1028,7 @@ paths:
                 file: { type: string, format: binary }
                 purpose: { type: string, enum: [AVATAR, PLACE_IMAGE, PLACE_REPORT, SUPPORT, COLLECTION] }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '201':
           description: Created
           content:
@@ -1039,6 +1059,7 @@ paths:
                   maxItems: 50
                   items: { $ref: '#/components/schemas/AnalyticsEvent' }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '202': { description: Accepted }
         '400': { $ref: '#/components/responses/BadRequest' }
 
@@ -1372,6 +1393,7 @@ paths:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/Size'
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -1389,6 +1411,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/UserId' }]
       requestBody: { $ref: '#/components/requestBodies/Reason' }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -1404,6 +1427,7 @@ paths:
       parameters: [{ $ref: '#/components/parameters/UserId' }]
       requestBody: { $ref: '#/components/requestBodies/Reason' }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -1433,6 +1457,7 @@ paths:
                   items: { $ref: '#/components/schemas/Role' }
                 reason: { type: string, maxLength: 1000 }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -1677,6 +1702,7 @@ paths:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/Size'
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -1703,6 +1729,7 @@ paths:
           in: query
           schema: { $ref: '#/components/schemas/Platform' }
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -1719,6 +1746,7 @@ paths:
       security: [{ bearerAuth: [] }]
       parameters: *reportFilters
       responses:
+        default: { $ref: '#/components/responses/StandardError' }
         '200':
           description: OK
           content:
@@ -1823,6 +1851,11 @@ components:
               reason: { type: string, minLength: 1, maxLength: 1000 }
 
   responses:
+    StandardError:
+      description: 'Lỗi chuẩn của các operation A, gồm validation/quyền/trạng thái/tích hợp chưa sẵn sàng; xem status trong Problem.'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
     BadRequest:
       description: Dữ liệu không hợp lệ
       content:

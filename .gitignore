@@ -55,3 +55,6 @@ logs/
 *.log
 hs_err_pid*
 replay_pid*
+
+# Private local uploads
+.local-data/uploads/
