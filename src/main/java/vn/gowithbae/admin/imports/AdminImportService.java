@@ -28,8 +28,8 @@ import vn.gowithbae.admin.place.AdminPlaceService;
 import vn.gowithbae.api.model.ImportBatch;
 import vn.gowithbae.api.model.ImportBatch.StatusEnum;
 import vn.gowithbae.api.model.ImportBatchRowsInner;
-import vn.gowithbae.common.audit.AuditService;
-import vn.gowithbae.common.security.CurrentUser;
+import vn.gowithbae.platform.AuditService;
+import vn.gowithbae.platform.CurrentUser;
 import vn.gowithbae.common.web.Problems;
 
 /**
@@ -51,9 +51,11 @@ public class AdminImportService {
     private final AdminPlaceService places;
     private final AuditService audit;
     private final ObjectMapper json;
+    private final CurrentUser currentUser;
 
     public AdminImportService(JdbcClient jdbc, ImportRowValidator validator, AdminPlaceService places,
-            AuditService audit, ObjectMapper json) {
+            AuditService audit, ObjectMapper json, CurrentUser currentUser) {
+        this.currentUser = currentUser;
         this.jdbc = jdbc;
         this.validator = validator;
         this.places = places;
@@ -86,7 +88,7 @@ public class AdminImportService {
                 INSERT INTO import_batch (created_by, template_version, status, total_rows, error_rows)
                 VALUES (:actor, :version, :status, :total, :errors) RETURNING id
                 """)
-                .param("actor", CurrentUser.id())
+                .param("actor", currentUser.id())
                 .param("version", ImportRowValidator.TEMPLATE_VERSION)
                 .param("status", errorRows == 0 ? "VALIDATED" : "INVALID")
                 .param("total", rows.size())
@@ -165,7 +167,7 @@ public class AdminImportService {
         }
         jdbc.sql("UPDATE import_batch SET status = 'COMMITTED', committed_at = now() WHERE id = :id")
                 .param("id", batchId).update();
-        audit.log(CurrentUser.id(), "IMPORT_COMMIT", "import_batch", batchId, null, Map.of("places", rows.size()), null);
+        audit.log(currentUser.id(), "IMPORT_COMMIT", "import_batch", batchId.toString(), null, Map.of("places", rows.size()), null);
         return get(batchId);
     }
 

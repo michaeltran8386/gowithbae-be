@@ -20,6 +20,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -33,7 +34,7 @@ import vn.gowithbae.admin.imports.ImportRowValidator;
 @Testcontainers(disabledWithoutDocker = true)
 @Import(TestcontainersConfiguration.class)
 @SpringBootTest(properties = {
-        "app.jwt.secret=" + TestJwt.SECRET,
+        "app.jwt.secret=test-secret-test-secret-test-secret-123",
         "app.files.public-base-url=https://cdn.test/files",
         "DB_URL=", "DB_USERNAME=", "DB_PASSWORD="
 })
@@ -44,6 +45,12 @@ class AdminImportsApiTest {
 
     @Autowired MockMvc mvc;
     @Autowired JdbcClient jdbc;
+    @Autowired JwtEncoder encoder;
+
+    /** Token thật của phần A: gán vai trò trong user_role và tạo access_session (TestJwtFactory). */
+    private String bearer(UUID userId, String role) {
+        return "Bearer " + new TestJwtFactory(jdbc, encoder).token(userId, role);
+    }
 
     UUID editor;
     UUID support;
@@ -70,7 +77,7 @@ class AdminImportsApiTest {
     private ResultActions upload(UUID actor, String role, byte[] bytes) throws Exception {
         return mvc.perform(multipart("/api/v1/admin/imports")
                 .file(new MockMultipartFile("file", "places.csv", "text/csv", bytes))
-                .header("Authorization", TestJwt.bearer(actor, role)));
+                .header("Authorization", bearer(actor, role)));
     }
 
     private ResultActions upload(String csv) throws Exception {
@@ -79,7 +86,7 @@ class AdminImportsApiTest {
 
     private ResultActions commit(String batchId) throws Exception {
         return mvc.perform(post("/api/v1/admin/imports/{id}/commit", batchId)
-                .header("Authorization", TestJwt.bearer(editor, "EDITOR")));
+                .header("Authorization", bearer(editor, "EDITOR")));
     }
 
     private long places() {
@@ -88,11 +95,11 @@ class AdminImportsApiTest {
 
     @Test
     void templateHasAllColumnsAndRequiresEditor() throws Exception {
-        mvc.perform(get("/api/v1/admin/imports/template.csv").header("Authorization", TestJwt.bearer(editor, "EDITOR")))
+        mvc.perform(get("/api/v1/admin/imports/template.csv").header("Authorization", bearer(editor, "EDITOR")))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith("text/csv"))
                 .andExpect(content().string(containsString(HEADER)));
-        mvc.perform(get("/api/v1/admin/imports/template.csv").header("Authorization", TestJwt.bearer(support, "SUPPORT")))
+        mvc.perform(get("/api/v1/admin/imports/template.csv").header("Authorization", bearer(support, "SUPPORT")))
                 .andExpect(status().isForbidden());
     }
 
@@ -160,7 +167,7 @@ class AdminImportsApiTest {
                 .andReturn().getResponse().getContentAsString();
         String batchId = JsonPath.read(json, "$.id");
 
-        mvc.perform(get("/api/v1/admin/imports/{id}", batchId).header("Authorization", TestJwt.bearer(editor, "EDITOR")))
+        mvc.perform(get("/api/v1/admin/imports/{id}", batchId).header("Authorization", bearer(editor, "EDITOR")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rows.length()").value(4));
         commit(batchId)
@@ -200,7 +207,7 @@ class AdminImportsApiTest {
                 .andExpect(jsonPath("$.detail").value("File phải mã hóa UTF-8"));
         upload(support, "SUPPORT", (HEADER + "\n").getBytes(StandardCharsets.UTF_8)).andExpect(status().isForbidden());
         assertThat(jdbc.sql("SELECT count(*) FROM import_batch").query(Long.class).single()).isZero();
-        mvc.perform(get("/api/v1/admin/imports/{id}", UUID.randomUUID()).header("Authorization", TestJwt.bearer(editor, "EDITOR")))
+        mvc.perform(get("/api/v1/admin/imports/{id}", UUID.randomUUID()).header("Authorization", bearer(editor, "EDITOR")))
                 .andExpect(status().isNotFound());
     }
 }

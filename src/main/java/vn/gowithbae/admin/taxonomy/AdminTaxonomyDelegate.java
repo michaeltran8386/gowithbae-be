@@ -21,8 +21,8 @@ import vn.gowithbae.api.model.AreaWrite;
 import vn.gowithbae.api.model.Taxonomy;
 import vn.gowithbae.api.model.TaxonomyGroup;
 import vn.gowithbae.api.model.TaxonomyWrite;
-import vn.gowithbae.common.audit.AuditService;
-import vn.gowithbae.common.security.CurrentUser;
+import vn.gowithbae.platform.AuditService;
+import vn.gowithbae.platform.CurrentUser;
 import vn.gowithbae.common.web.Problems;
 import vn.gowithbae.place.SearchTextUpdater;
 
@@ -37,7 +37,13 @@ public class AdminTaxonomyDelegate implements AdminTaxonomyApiDelegate {
     private final SearchTextUpdater searchText;
     private final AuditService audit;
 
-    public AdminTaxonomyDelegate(JdbcClient jdbc, SearchTextUpdater searchText, AuditService audit) {
+    private final CurrentUser currentUser;
+    private final AdminPermissions permissions;
+
+    public AdminTaxonomyDelegate(JdbcClient jdbc, SearchTextUpdater searchText, AuditService audit,
+            CurrentUser currentUser, AdminPermissions permissions) {
+        this.currentUser = currentUser;
+        this.permissions = permissions;
         this.jdbc = jdbc;
         this.searchText = searchText;
         this.audit = audit;
@@ -46,7 +52,7 @@ public class AdminTaxonomyDelegate implements AdminTaxonomyApiDelegate {
     /** Gồm cả nhãn ngừng dùng để quản trị thấy và khôi phục được. */
     @Override
     public ResponseEntity<List<Taxonomy>> adminListTaxonomies(TaxonomyGroup group) {
-        AdminPermissions.requireContentRead();
+        permissions.requireContentRead();
         var rows = jdbc.sql("""
                 SELECT id, group_code, code, name, status FROM taxonomy
                 WHERE CAST(:group AS text) IS NULL OR group_code = CAST(:group AS text)
@@ -63,7 +69,7 @@ public class AdminTaxonomyDelegate implements AdminTaxonomyApiDelegate {
     @Override
     @Transactional
     public ResponseEntity<Taxonomy> adminCreateTaxonomy(TaxonomyWrite body) {
-        AdminPermissions.requireTaxonomyAdmin();
+        permissions.requireTaxonomyAdmin();
         String name = requireName(body.getName());
         UUID id;
         try {
@@ -74,7 +80,7 @@ public class AdminTaxonomyDelegate implements AdminTaxonomyApiDelegate {
             throw Problems.conflict("TAXONOMY_CODE_TAKEN", "Mã nhãn đã tồn tại trong nhóm này");
         }
         Taxonomy created = taxonomy(id);
-        audit.log(CurrentUser.id(), "TAXONOMY_CREATE", "taxonomy", id, null, state(created.getName(), created.getStatus()), null);
+        audit.log(currentUser.id(), "TAXONOMY_CREATE", "taxonomy", id.toString(), null, state(created.getName(), created.getStatus()), null);
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
@@ -82,7 +88,7 @@ public class AdminTaxonomyDelegate implements AdminTaxonomyApiDelegate {
     @Override
     @Transactional
     public ResponseEntity<Taxonomy> adminUpdateTaxonomy(UUID taxonomyId, AdminUpdateTaxonomyRequest body) {
-        AdminPermissions.requireTaxonomyAdmin();
+        permissions.requireTaxonomyAdmin();
         Taxonomy before = taxonomy(taxonomyId);
         String name = body.getName() == null ? before.getName() : requireName(body.getName());
         ActiveStatus status = body.getStatus() == null ? before.getStatus() : body.getStatus();
@@ -90,7 +96,7 @@ public class AdminTaxonomyDelegate implements AdminTaxonomyApiDelegate {
                 .param("n", name).param("s", status.getValue()).param("id", taxonomyId).update();
         searchText.refresh(jdbc.sql("SELECT place_id FROM place_tag WHERE taxonomy_id = :id")
                 .param("id", taxonomyId).query(UUID.class).list());
-        audit.log(CurrentUser.id(), "TAXONOMY_UPDATE", "taxonomy", taxonomyId,
+        audit.log(currentUser.id(), "TAXONOMY_UPDATE", "taxonomy", taxonomyId.toString(),
                 state(before.getName(), before.getStatus()), state(name, status), null);
         return ResponseEntity.ok(taxonomy(taxonomyId));
     }
@@ -98,7 +104,7 @@ public class AdminTaxonomyDelegate implements AdminTaxonomyApiDelegate {
     @Override
     @Transactional
     public ResponseEntity<Area> adminCreateArea(AreaWrite body) {
-        AdminPermissions.requireTaxonomyAdmin();
+        permissions.requireTaxonomyAdmin();
         String name = requireName(body.getName());
         UUID id;
         try {
@@ -108,14 +114,14 @@ public class AdminTaxonomyDelegate implements AdminTaxonomyApiDelegate {
             throw Problems.conflict("AREA_CODE_TAKEN", "Mã khu vực đã tồn tại");
         }
         Area created = area(id);
-        audit.log(CurrentUser.id(), "AREA_CREATE", "area", id, null, state(created.getName(), created.getStatus()), null);
+        audit.log(currentUser.id(), "AREA_CREATE", "area", id.toString(), null, state(created.getName(), created.getStatus()), null);
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
     @Override
     @Transactional
     public ResponseEntity<Area> adminUpdateArea(UUID areaId, AdminUpdateTaxonomyRequest body) {
-        AdminPermissions.requireTaxonomyAdmin();
+        permissions.requireTaxonomyAdmin();
         Area before = area(areaId);
         String name = body.getName() == null ? before.getName() : requireName(body.getName());
         ActiveStatus status = body.getStatus() == null ? before.getStatus() : body.getStatus();
@@ -125,7 +131,7 @@ public class AdminTaxonomyDelegate implements AdminTaxonomyApiDelegate {
             searchText.refresh(jdbc.sql("SELECT id FROM place WHERE area_id = :id")
                     .param("id", areaId).query(UUID.class).list());
         }
-        audit.log(CurrentUser.id(), "AREA_UPDATE", "area", areaId,
+        audit.log(currentUser.id(), "AREA_UPDATE", "area", areaId.toString(),
                 state(before.getName(), before.getStatus()), state(name, status), null);
         return ResponseEntity.ok(area(areaId));
     }

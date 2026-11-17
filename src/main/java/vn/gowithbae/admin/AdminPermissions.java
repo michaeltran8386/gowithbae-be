@@ -1,11 +1,13 @@
 package vn.gowithbae.admin;
 
-import vn.gowithbae.common.security.CurrentUser;
-import vn.gowithbae.common.web.Problems;
+import org.springframework.stereotype.Component;
+
+import vn.gowithbae.platform.CurrentUser;
 
 /**
  * Ma trận quyền quản trị nội dung (phần B). shortcut: OQ-18 chưa chốt ma trận chi tiết; đây là đề xuất
- * "mặc định từ chối". PO chốt xong chỉ sửa ở file này.
+ * "mặc định từ chối". PO chốt xong chỉ sửa ở file này. Vai trò lấy từ DB qua {@link CurrentUser} (phần A),
+ * không tin claim trong token.
  * <ul>
  * <li>Xem địa điểm/danh mục/bộ sưu tập: EDITOR, REVIEWER, SUPER_ADMIN</li>
  * <li>Biên tập nháp, gửi duyệt, ảnh, CSV, bộ sưu tập: EDITOR, SUPER_ADMIN</li>
@@ -14,30 +16,28 @@ import vn.gowithbae.common.web.Problems;
  * <li>SUPPORT: không có quyền ở phần nội dung</li>
  * </ul>
  */
-public final class AdminPermissions {
+@Component
+public class AdminPermissions {
 
-    private AdminPermissions() {
+    private final CurrentUser currentUser;
+
+    public AdminPermissions(CurrentUser currentUser) {
+        this.currentUser = currentUser;
     }
 
-    public static void requireContentRead() {
-        require("Không có quyền xem nội dung quản trị", "EDITOR", "REVIEWER", "SUPER_ADMIN");
+    public void requireContentRead() {
+        currentUser.requireAnyRole("EDITOR", "REVIEWER", "SUPER_ADMIN");
     }
 
-    public static void requireContentEdit() {
-        require("Không có quyền biên tập nội dung", "EDITOR", "SUPER_ADMIN");
+    public void requireContentEdit() {
+        currentUser.requireAnyRole("EDITOR", "SUPER_ADMIN");
     }
 
-    public static void requireContentReview() {
-        require("Không có quyền duyệt nội dung", "REVIEWER", "SUPER_ADMIN");
+    public void requireContentReview() {
+        currentUser.requireAnyRole("REVIEWER", "SUPER_ADMIN");
     }
 
-    public static void requireTaxonomyAdmin() {
-        require("Không có quyền quản lý nhãn và khu vực", "SUPER_ADMIN");
-    }
-
-    private static void require(String message, String... roles) {
-        if (!CurrentUser.hasAnyRole(roles)) {
-            throw Problems.forbidden(message);
-        }
+    public void requireTaxonomyAdmin() {
+        currentUser.requireAnyRole("SUPER_ADMIN");
     }
 }

@@ -32,9 +32,9 @@ import vn.gowithbae.api.model.PlaceImage;
 import vn.gowithbae.api.model.PlaceImageWrite;
 import vn.gowithbae.api.model.PlaceStatus;
 import vn.gowithbae.api.model.TimeRange;
-import vn.gowithbae.common.audit.AuditService;
+import vn.gowithbae.platform.AuditService;
 import vn.gowithbae.common.files.FileUrls;
-import vn.gowithbae.common.security.CurrentUser;
+import vn.gowithbae.platform.CurrentUser;
 import vn.gowithbae.common.web.Problems;
 import vn.gowithbae.place.PlaceReader;
 import vn.gowithbae.place.PlacesDelegate;
@@ -70,9 +70,11 @@ public class AdminPlaceService {
     private final SearchTextUpdater searchText;
     private final AuditService audit;
     private final FileUrls fileUrls;
+    private final CurrentUser currentUser;
 
     public AdminPlaceService(JdbcClient jdbc, PlaceReader reader, SearchTextUpdater searchText, AuditService audit,
-            FileUrls fileUrls) {
+            FileUrls fileUrls, CurrentUser currentUser) {
+        this.currentUser = currentUser;
         this.jdbc = jdbc;
         this.reader = reader;
         this.searchText = searchText;
@@ -144,7 +146,7 @@ public class AdminPlaceService {
                     RETURNING id
                     """)
                     .params(placeParams(w))
-                    .param("actor", CurrentUser.id())
+                    .param("actor", currentUser.id())
                     .query(UUID.class)
                     .single();
         } catch (DuplicateKeyException e) {
@@ -152,7 +154,7 @@ public class AdminPlaceService {
         }
         writeChildren(id, w);
         searchText.refresh(List.of(id));
-        audit.log(CurrentUser.id(), "PLACE_CREATE", "place", id, null, snapshot(id), auditReason);
+        audit.log(currentUser.id(), "PLACE_CREATE", "place", id.toString(), null, snapshot(id), auditReason);
         return id;
     }
 
@@ -178,7 +180,7 @@ public class AdminPlaceService {
         }
         writeChildren(id, w);
         searchText.refresh(List.of(id));
-        audit.log(CurrentUser.id(), "PLACE_UPDATE", "place", id, before, snapshot(id), null);
+        audit.log(currentUser.id(), "PLACE_UPDATE", "place", id.toString(), before, snapshot(id), null);
         return get(id);
     }
 
@@ -205,7 +207,7 @@ public class AdminPlaceService {
         if (t.needsReason() && cleanReason == null) {
             throw Problems.badRequest("Cần ghi lý do", List.of(Problems.fieldError("reason", "Bắt buộc với " + action.getValue())));
         }
-        UUID actor = CurrentUser.id();
+        UUID actor = currentUser.id();
         if (action == ActionEnum.APPROVE && actor.toString().equals(row[1])) {
             throw Problems.forbidden("Không được tự duyệt địa điểm do chính mình tạo");
         }
@@ -228,7 +230,7 @@ public class AdminPlaceService {
                 .param("actor", actor)
                 .param("id", id)
                 .update();
-        audit.log(actor, "PLACE_" + action.getValue(), "place", id,
+        audit.log(actor, "PLACE_" + action.getValue(), "place", id.toString(),
                 Map.of("status", from), Map.of("status", t.to()), cleanReason);
         return get(id);
     }
@@ -267,7 +269,7 @@ public class AdminPlaceService {
                 .query(UUID.class)
                 .single();
         touch(placeId);
-        audit.log(CurrentUser.id(), "PLACE_IMAGE_ADD", "place", placeId, null,
+        audit.log(currentUser.id(), "PLACE_IMAGE_ADD", "place", placeId.toString(), null,
                 Map.of("imageId", imageId.toString(), "fileId", w.getFileId().toString(), "cover", cover), null);
         // shortcut: OQ-21 — chưa cấu hình URL gốc thì url null dù contract yêu cầu; FE quản trị hiển thị ảnh mặc định.
         return new PlaceImage(imageId, fileUrls.publicUrl(storageKey), sortOrder, cover).caption(blankToNull(w.getCaption()));
@@ -282,7 +284,7 @@ public class AdminPlaceService {
             throw Problems.notFound();
         }
         touch(placeId);
-        audit.log(CurrentUser.id(), "PLACE_IMAGE_REMOVE", "place", placeId, Map.of("imageId", imageId.toString()), null, null);
+        audit.log(currentUser.id(), "PLACE_IMAGE_REMOVE", "place", placeId.toString(), Map.of("imageId", imageId.toString()), null, null);
     }
 
     // ───────────── Điều kiện xuất bản (RULE-20) ─────────────
