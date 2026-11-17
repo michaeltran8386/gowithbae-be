@@ -56,6 +56,8 @@ public class SecurityConfig {
                         API + "/date-plans/*/calendar.ics", API + "/date-plans/*/reminder").permitAll()
                 .requestMatchers(HttpMethod.PUT, API + "/choice-sessions/*/votes/*", API + "/date-plans/*/visit-report",
                         API + "/date-plans/*/reminder").permitAll()
+                // Biên tập/duyệt cần xem danh sách nhãn (kể cả ngừng dùng) để gắn cho địa điểm; chỉ thêm/sửa mới cần SUPER_ADMIN.
+                .requestMatchers(HttpMethod.GET, API + "/admin/taxonomies").hasAnyRole("EDITOR", "REVIEWER", "SUPER_ADMIN")
                 .requestMatchers(API + "/admin/users/**", API + "/admin/audit-logs", API + "/admin/reports/**",
                         API + "/admin/taxonomies/**", API + "/admin/areas/**").hasRole("SUPER_ADMIN")
                 .requestMatchers(API + "/admin/places/**", API + "/admin/collections/**", API + "/admin/imports/**")
