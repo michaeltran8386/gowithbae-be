@@ -41,8 +41,11 @@ public class SecurityConfig {
                 .requestMatchers(API + "/auth/otp/**", API + "/share-grants/**").permitAll()
                 // Bearer HOẶC X-Recipient-Session: delegate bắt buộc kiểm tra một trong hai (RULE-12)
                 .requestMatchers(HttpMethod.GET, API + "/choice-sessions/*", API + "/date-plans/*",
-                        API + "/date-plans/*/calendar.ics").permitAll()
-                .requestMatchers(HttpMethod.PUT, API + "/choice-sessions/*/votes/*", API + "/date-plans/*/visit-report").permitAll()
+                        API + "/date-plans/*/calendar.ics", API + "/date-plans/*/reminder").permitAll()
+                .requestMatchers(HttpMethod.PUT, API + "/choice-sessions/*/votes/*", API + "/date-plans/*/visit-report",
+                        API + "/date-plans/*/reminder").permitAll()
+                .requestMatchers(API + "/admin/place-reports/**").hasAnyRole("REVIEWER", "EDITOR", "SUPER_ADMIN")
+                .requestMatchers(API + "/admin/support-tickets/**").hasAnyRole("SUPPORT", "SUPER_ADMIN")
                 .requestMatchers(API + "/admin/**").hasAnyRole("EDITOR", "REVIEWER", "SUPPORT", "SUPER_ADMIN")
                 .anyRequest().authenticated())
             .oauth2ResourceServer(o -> o.jwt(j -> j.jwtAuthenticationConverter(rolesConverter())));

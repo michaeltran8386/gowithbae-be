@@ -20,10 +20,13 @@ import vn.gowithbae.api.model.BudgetBand;
 import vn.gowithbae.api.model.KnownStatus;
 import vn.gowithbae.api.model.PageMeta;
 import vn.gowithbae.api.model.PlaceCard;
+import vn.gowithbae.api.model.PlaceReportCreate;
+import vn.gowithbae.api.model.PlaceReportReceipt;
 import vn.gowithbae.api.model.PlaceSearchPage;
 import vn.gowithbae.api.model.Price;
 import vn.gowithbae.api.model.Taxonomy;
 import vn.gowithbae.api.model.TaxonomyGroup;
+import vn.gowithbae.report.PlaceReportService;
 
 /**
  * GET /places — endpoint mẫu chạy thật (FR-02, FR-03 phần khu vực/ngân sách, FR-04 phần sắp xếp).
@@ -33,9 +36,16 @@ import vn.gowithbae.api.model.TaxonomyGroup;
 public class PlacesDelegate implements PlacesApiDelegate {
 
     private final JdbcClient jdbc;
+    private final PlaceReportService placeReportService;
 
-    public PlacesDelegate(JdbcClient jdbc) {
+    public PlacesDelegate(JdbcClient jdbc, PlaceReportService placeReportService) {
         this.jdbc = jdbc;
+        this.placeReportService = placeReportService;
+    }
+
+    @Override
+    public ResponseEntity<PlaceReportReceipt> reportPlace(UUID placeId, PlaceReportCreate placeReportCreate) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(placeReportService.submitReport(placeId, placeReportCreate));
     }
 
     @Override

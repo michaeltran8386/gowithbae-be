@@ -18,6 +18,8 @@ import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
+import jakarta.validation.ConstraintViolationException;
+
 /** Mọi lỗi trả application/problem+json theo schema Problem của contract. */
 @RestControllerAdvice
 public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
@@ -45,6 +47,21 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 .toList();
         body.setProperty("errors", errors);
         return handleExceptionInternal(ex, body, headers, status, request);
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    ProblemDetail constraintViolation(ConstraintViolationException ex) {
+        ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Dữ liệu không hợp lệ");
+        List<Map<String, String>> errors = ex.getConstraintViolations().stream()
+                .map(v -> {
+                    String path = String.valueOf(v.getPropertyPath());
+                    int dot = path.lastIndexOf('.');
+                    String field = dot >= 0 ? path.substring(dot + 1) : path;
+                    return Map.of("field", field, "message", String.valueOf(v.getMessage()));
+                })
+                .toList();
+        pd.setProperty("errors", errors);
+        return pd;
     }
 
     /** Lỗi không lường trước: không trả stack/bí mật, chỉ traceId để tra log (RULE-27). */
