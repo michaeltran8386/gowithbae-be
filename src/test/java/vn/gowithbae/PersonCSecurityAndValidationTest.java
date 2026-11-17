@@ -146,6 +146,16 @@ class PersonCSecurityAndValidationTest {
         mvc.perform(get("/api/v1/admin/support-tickets")
                         .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_SUPPORT"))))
                 .andExpect(status().isOk());
+
+        mvc.perform(get("/api/v1/admin/places")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_SUPPORT"))))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
+
+        mvc.perform(post("/api/v1/admin/taxonomies")
+                        .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_EDITOR"))))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentTypeCompatibleWith("application/problem+json"));
     }
 
     @Test

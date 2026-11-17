@@ -3,16 +3,25 @@ package vn.gowithbae;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.web.ErrorResponseException;
 import org.springframework.web.server.ResponseStatusException;
 
 import tools.jackson.databind.json.JsonMapper;
@@ -27,6 +36,8 @@ import vn.gowithbae.common.ActorResolver.UserPrincipal;
 import vn.gowithbae.common.IdempotencyService;
 import vn.gowithbae.common.PageUtil;
 import vn.gowithbae.common.TimeHelper;
+import vn.gowithbae.place.PlaceQueryServiceImpl;
+import vn.gowithbae.place.PlaceReader;
 import vn.gowithbae.plan.DatePlanService;
 import vn.gowithbae.plan.IcsCalendarFormatter;
 import vn.gowithbae.platform.AuditService;
@@ -128,5 +139,47 @@ class PersonCServiceStateTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(ex -> ((ResponseStatusException) ex).getStatusCode())
                 .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void unifiedPlatformBridgesEnforceDbAuthoritiesSafeAuditAndPlaceLookup() {
+        UUID userId = UUID.randomUUID();
+        Jwt staleJwt = Jwt.withTokenValue("token")
+                .header("alg", "HS256")
+                .subject(userId.toString())
+                .claim("roles", List.of("SUPER_ADMIN"))
+                .build();
+        SecurityContext prev = SecurityContextHolder.getContext();
+        try {
+            SecurityContext ctx = SecurityContextHolder.createEmptyContext();
+            ctx.setAuthentication(new JwtAuthenticationToken(
+                    staleJwt,
+                    List.of(new SimpleGrantedAuthority("ROLE_REVIEWER")),
+                    userId.toString()));
+            SecurityContextHolder.setContext(ctx);
+
+            assertThat(vn.gowithbae.common.security.CurrentUser.id()).isEqualTo(userId);
+            assertThat(vn.gowithbae.common.security.CurrentUser.roles()).containsExactly("REVIEWER");
+            assertThat(vn.gowithbae.common.security.CurrentUser.hasAnyRole("SUPER_ADMIN")).isFalse();
+        } finally {
+            SecurityContextHolder.setContext(prev);
+        }
+
+        AuditService platformAudit = mock(AuditService.class);
+        var bridgedAudit = new vn.gowithbae.common.audit.AuditService(platformAudit, JsonMapper.builder().build());
+        UUID placeId = UUID.randomUUID();
+        bridgedAudit.log(userId, "PLACE_CREATE", "place", placeId, null, Map.of("status", "DRAFT"), "CSV");
+        verify(platformAudit).log(userId, "PLACE_CREATE", "place", placeId.toString(), null, Map.of("status", "DRAFT"), "CSV");
+
+        var realAudit = new AuditService(mock(JdbcClient.class), JsonMapper.builder().build());
+        var guardedBridge = new vn.gowithbae.common.audit.AuditService(realAudit, JsonMapper.builder().build());
+        assertThatThrownBy(() -> guardedBridge.log(userId, "TEST", "place", placeId, null, Map.of("notes", "secret"), null))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        var placeQuery = new PlaceQueryServiceImpl(mock(JdbcClient.class), mock(PlaceReader.class));
+        assertThatThrownBy(() -> placeQuery.requirePublished(null))
+                .isInstanceOf(ErrorResponseException.class)
+                .extracting(ex -> ((ErrorResponseException) ex).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
     }
 }

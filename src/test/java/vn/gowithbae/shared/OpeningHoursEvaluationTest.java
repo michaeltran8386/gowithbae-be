@@ -54,4 +54,17 @@ class OpeningHoursEvaluationTest {
 
         assertThat(status).isEqualTo(OpeningStatus.UNKNOWN);
     }
+
+    @Test
+    void closingBoundaryUsesHalfOpenIntervalMatchingPlaceSearch() {
+        ZonedDateTime exactClose = ZonedDateTime.of(2026, 12, 26, 22, 0, 0, 0, TimeHelper.VN_ZONE);
+        OpeningStatus status = PlaceCatalogService.evaluateOpeningRules(
+                "KNOWN",
+                exactClose,
+                List.of(),
+                List.of(),
+                List.of(new TimeWindow(LocalTime.of(9, 0), LocalTime.of(22, 0))));
+
+        assertThat(status).isEqualTo(OpeningStatus.CLOSED);
+    }
 }

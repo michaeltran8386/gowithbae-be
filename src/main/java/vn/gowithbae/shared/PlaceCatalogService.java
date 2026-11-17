@@ -18,17 +18,13 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
-import vn.gowithbae.api.model.ActiveStatus;
-import vn.gowithbae.api.model.KnownStatus;
 import vn.gowithbae.api.model.PlaceCard;
-import vn.gowithbae.api.model.Price;
-import vn.gowithbae.api.model.Taxonomy;
-import vn.gowithbae.api.model.TaxonomyGroup;
 import vn.gowithbae.common.TimeHelper;
+import vn.gowithbae.place.PlaceReader;
 
 /**
- * Truy vấn đọc địa điểm, danh sách đã lưu và giờ mở cửa phục vụ các module của Người C
- * (giữ tách biệt khỏi bean vn.gowithbae.platform.PlaceQueryService mà Người B sẽ cung cấp).
+ * Truy vấn đọc địa điểm, danh sách đã lưu và giờ mở cửa phục vụ các module của Người C,
+ * dùng lại {@link PlaceReader} (phần B) để thẻ địa điểm và {@code coverUrl} đồng nhất toàn hệ thống.
  */
 @Service
 public class PlaceCatalogService {
@@ -53,9 +49,11 @@ public class PlaceCatalogService {
     }
 
     private final JdbcClient jdbc;
+    private final PlaceReader placeReader;
 
-    public PlaceCatalogService(JdbcClient jdbc) {
+    public PlaceCatalogService(JdbcClient jdbc, PlaceReader placeReader) {
         this.jdbc = jdbc;
+        this.placeReader = placeReader;
     }
 
     public Optional<PlaceSummary> findPlace(UUID placeId) {
@@ -67,33 +65,14 @@ public class PlaceCatalogService {
             return Collections.emptyMap();
         }
         Set<UUID> distinctIds = Set.copyOf(placeIds);
-        List<PlaceSummary> rows = jdbc.sql("""
-                SELECT p.id, p.name, p.address, p.status, p.hours_status, p.lat, p.lng,
-                       a.name AS area_name,
-                       COALESCE(pp.status, 'UNKNOWN') AS price_status,
-                       pp.standard_for_two, pp.min_price, pp.max_price, pp.includes, pp.verified_at AS price_verified_at
-                FROM place p
-                JOIN area a ON a.id = p.area_id
-                LEFT JOIN place_price pp ON pp.place_id = p.id
-                WHERE p.id IN (:ids)
-                """)
+        List<PlaceSummary> rows = jdbc.sql("SELECT p.address, p.status, p.hours_status, "
+                        + PlaceReader.CARD_COLUMNS + PlaceReader.CARD_FROM + " WHERE p.id IN (:ids)")
                 .param("ids", distinctIds)
                 .query((rs, rowNum) -> {
-                    Price price = new Price(KnownStatus.fromValue(rs.getString("price_status")))
-                            .standardForTwo(rs.getObject("standard_for_two", Long.class))
-                            .min(rs.getObject("min_price", Long.class))
-                            .max(rs.getObject("max_price", Long.class))
-                            .includes(rs.getString("includes"))
-                            .verifiedAt(rs.getObject("price_verified_at", LocalDate.class));
-                    UUID id = rs.getObject("id", UUID.class);
-                    PlaceCard card = new PlaceCard(id, rs.getString("name"), price, new ArrayList<>())
-                            .areaName(rs.getString("area_name"))
-                            .coverUrl(null)
-                            .lat(rs.getObject("lat", Double.class))
-                            .lng(rs.getObject("lng", Double.class));
+                    PlaceCard card = placeReader.mapCard(rs);
                     return new PlaceSummary(
-                            id,
-                            rs.getString("name"),
+                            card.getId(),
+                            card.getName(),
                             rs.getString("address"),
                             rs.getString("status"),
                             rs.getString("hours_status"),
@@ -105,32 +84,13 @@ public class PlaceCatalogService {
             return Collections.emptyMap();
         }
 
+        List<PlaceCard> cards = new ArrayList<>(rows.size());
         Map<UUID, PlaceSummary> byId = new LinkedHashMap<>();
         for (PlaceSummary summary : rows) {
+            cards.add(summary.card());
             byId.put(summary.id(), summary);
         }
-
-        jdbc.sql("""
-                SELECT place_id, id, group_code, code, name FROM (
-                  SELECT pt.place_id, t.id, t.group_code, t.code, t.name,
-                         row_number() OVER (PARTITION BY pt.place_id ORDER BY t.group_code, t.code) AS rn
-                  FROM place_tag pt JOIN taxonomy t ON t.id = pt.taxonomy_id
-                  WHERE pt.place_id IN (:ids) AND t.status = 'ACTIVE' AND t.group_code <> 'CATEGORY'
-                ) x WHERE rn <= 3
-                """)
-                .param("ids", byId.keySet())
-                .query(rs -> {
-                    PlaceSummary target = byId.get(rs.getObject("place_id", UUID.class));
-                    if (target != null) {
-                        target.card().addTagsItem(new Taxonomy(
-                                rs.getObject("id", UUID.class),
-                                TaxonomyGroup.fromValue(rs.getString("group_code")),
-                                rs.getString("code"),
-                                rs.getString("name"),
-                                ActiveStatus.ACTIVE));
-                    }
-                });
-
+        placeReader.attachTags(cards);
         return byId;
     }
 
@@ -244,8 +204,9 @@ public class PlaceCatalogService {
         if (opensAt == null || closesAt == null) {
             return false;
         }
+        // Khớp quy tắc [opens_at, closes_at) của PlacesDelegate (phần B, OQ-04)
         if (closesAt.isAfter(opensAt)) {
-            return !time.isBefore(opensAt) && !time.isAfter(closesAt);
+            return !time.isBefore(opensAt) && time.isBefore(closesAt);
         }
         return !time.isBefore(opensAt);
     }
@@ -254,7 +215,7 @@ public class PlaceCatalogService {
         if (opensAt == null || closesAt == null) {
             return false;
         }
-        return !closesAt.isAfter(opensAt) && !time.isAfter(closesAt);
+        return !closesAt.isAfter(opensAt) && time.isBefore(closesAt);
     }
 
     public record ExceptionRow(LocalDate onDate, boolean closed, @Nullable LocalTime opensAt, @Nullable LocalTime closesAt) {}

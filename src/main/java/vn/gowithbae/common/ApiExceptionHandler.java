@@ -4,6 +4,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import jakarta.validation.ConstraintViolationException;
+import jakarta.validation.Path;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -17,8 +20,6 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
-
-import jakarta.validation.ConstraintViolationException;
 
 /** Mọi lỗi trả application/problem+json theo schema Problem của contract. */
 @RestControllerAdvice
@@ -49,19 +50,25 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return handleExceptionInternal(ex, body, headers, status, request);
     }
 
+    /**
+     * Ràng buộc tham số (@Size, @Max, @Pattern…) trên controller sinh từ contract được kiểm tra bằng
+     * MethodValidationInterceptor và ném ConstraintViolationException; trả 400 thay vì rơi vào lỗi 500.
+     */
     @ExceptionHandler(ConstraintViolationException.class)
     ProblemDetail constraintViolation(ConstraintViolationException ex) {
         ProblemDetail pd = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Dữ liệu không hợp lệ");
-        List<Map<String, String>> errors = ex.getConstraintViolations().stream()
-                .map(v -> {
-                    String path = String.valueOf(v.getPropertyPath());
-                    int dot = path.lastIndexOf('.');
-                    String field = dot >= 0 ? path.substring(dot + 1) : path;
-                    return Map.of("field", field, "message", String.valueOf(v.getMessage()));
-                })
-                .toList();
-        pd.setProperty("errors", errors);
+        pd.setProperty("errors", ex.getConstraintViolations().stream()
+                .map(v -> Map.of("field", lastNode(v.getPropertyPath()), "message", String.valueOf(v.getMessage())))
+                .toList());
         return pd;
+    }
+
+    private static String lastNode(Path path) {
+        String name = "";
+        for (Path.Node node : path) {
+            name = String.valueOf(node.getName());
+        }
+        return name;
     }
 
     /** Lỗi không lường trước: không trả stack/bí mật, chỉ traceId để tra log (RULE-27). */

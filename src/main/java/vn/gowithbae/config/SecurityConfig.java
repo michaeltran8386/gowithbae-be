@@ -56,7 +56,10 @@ public class SecurityConfig {
                         API + "/date-plans/*/calendar.ics", API + "/date-plans/*/reminder").permitAll()
                 .requestMatchers(HttpMethod.PUT, API + "/choice-sessions/*/votes/*", API + "/date-plans/*/visit-report",
                         API + "/date-plans/*/reminder").permitAll()
-                .requestMatchers(API + "/admin/users/**", API + "/admin/audit-logs", API + "/admin/reports/**").hasRole("SUPER_ADMIN")
+                .requestMatchers(API + "/admin/users/**", API + "/admin/audit-logs", API + "/admin/reports/**",
+                        API + "/admin/taxonomies/**", API + "/admin/areas/**").hasRole("SUPER_ADMIN")
+                .requestMatchers(API + "/admin/places/**", API + "/admin/collections/**", API + "/admin/imports/**")
+                        .hasAnyRole("EDITOR", "REVIEWER", "SUPER_ADMIN")
                 .requestMatchers(API + "/admin/place-reports/**").hasAnyRole("REVIEWER", "EDITOR", "SUPER_ADMIN")
                 .requestMatchers(API + "/admin/support-tickets/**").hasAnyRole("SUPPORT", "SUPER_ADMIN")
                 .requestMatchers(API + "/admin/**").hasAnyRole("EDITOR", "REVIEWER", "SUPPORT", "SUPER_ADMIN")
