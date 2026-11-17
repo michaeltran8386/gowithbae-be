@@ -29,6 +29,7 @@ import vn.gowithbae.common.ActorResolver.UserPrincipal;
 import vn.gowithbae.common.PageUtil;
 import vn.gowithbae.common.TimeHelper;
 import vn.gowithbae.platform.AuditService;
+import vn.gowithbae.place.PlaceLookupService;
 import vn.gowithbae.platform.PlaceQueryService;
 import vn.gowithbae.platform.RequestRateLimiter;
 import vn.gowithbae.shared.StoredFileLookup;
@@ -48,6 +49,7 @@ public class PlaceReportService {
     private final StoredFileLookup storedFileLookup;
     private final AuditService auditService;
     private final RequestRateLimiter rateLimiter;
+    private final PlaceLookupService placeLookup;
 
     public PlaceReportService(
             JdbcClient jdbc,
@@ -55,7 +57,9 @@ public class PlaceReportService {
             PlaceQueryService placeQueryService,
             StoredFileLookup storedFileLookup,
             AuditService auditService,
-            RequestRateLimiter rateLimiter) {
+            RequestRateLimiter rateLimiter,
+            PlaceLookupService placeLookup) {
+        this.placeLookup = placeLookup;
         this.jdbc = jdbc;
         this.actorResolver = actorResolver;
         this.placeQueryService = placeQueryService;
@@ -134,10 +138,9 @@ public class PlaceReportService {
                 .single();
 
         List<ReportRow> rows = jdbc.sql("""
-                SELECT pr.id, pr.place_id, p.name AS place_name, pr.reason, pr.description, pr.file_id,
+                SELECT pr.id, pr.place_id, CAST(NULL AS text) AS place_name, pr.reason, pr.description, pr.file_id,
                        pr.sender_user_id, pr.assignee_id, pr.status, pr.resolution_note, pr.created_at, pr.updated_at
                 FROM place_report pr
-                JOIN place p ON p.id = pr.place_id
                 WHERE (CAST(:status AS text) IS NULL OR pr.status = CAST(:status AS text))
                   AND (CAST(:assigneeId AS uuid) IS NULL OR pr.assignee_id = CAST(:assigneeId AS uuid))
                 ORDER BY pr.created_at DESC
@@ -156,8 +159,9 @@ public class PlaceReportService {
                 .collect(java.util.stream.Collectors.toSet());
         Map<UUID, StoredFile> files = storedFileLookup.getMetadata(fileIds);
 
+        Map<UUID, String> names = placeLookup.names(rows.stream().map(ReportRow::placeId).toList());
         List<PlaceReport> items = rows.stream()
-                .map(r -> toDto(r, r.fileId() == null ? null : files.get(r.fileId())))
+                .map(r -> toDto(r.withPlaceName(names.get(r.placeId())), r.fileId() == null ? null : files.get(r.fileId())))
                 .toList();
 
         return new PlaceReportPage(items, PageUtil.buildMeta(sanitizedPage, sanitizedSize, total == null ? 0L : total));
@@ -167,7 +171,7 @@ public class PlaceReportService {
         ReportRow row = findReportRow(reportId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy báo sai"));
         StoredFile attachment = row.fileId() == null ? null : storedFileLookup.getMetadata(List.of(row.fileId())).get(row.fileId());
-        return toDto(row, attachment);
+        return toDto(withName(row), attachment);
     }
 
     @Transactional
@@ -175,10 +179,9 @@ public class PlaceReportService {
         UserPrincipal admin = actorResolver.requireActiveUser();
 
         ReportRow before = jdbc.sql("""
-                SELECT pr.id, pr.place_id, p.name AS place_name, pr.reason, pr.description, pr.file_id,
+                SELECT pr.id, pr.place_id, CAST(NULL AS text) AS place_name, pr.reason, pr.description, pr.file_id,
                        pr.sender_user_id, pr.assignee_id, pr.status, pr.resolution_note, pr.created_at, pr.updated_at
                 FROM place_report pr
-                JOIN place p ON p.id = pr.place_id
                 WHERE pr.id = :id
                 FOR UPDATE OF pr
                 """)
@@ -223,7 +226,7 @@ public class PlaceReportService {
                 .query((rs, rowNum) -> new ReportRow(
                         rs.getObject("id", UUID.class),
                         rs.getObject("place_id", UUID.class),
-                        before.placeName(),
+                        null,
                         rs.getString("reason"),
                         rs.getString("description"),
                         rs.getObject("file_id", UUID.class),
@@ -254,7 +257,7 @@ public class PlaceReportService {
 
         StoredFile attachment = updated.fileId() == null ? null
                 : storedFileLookup.getMetadata(List.of(updated.fileId())).get(updated.fileId());
-        return toDto(updated, attachment);
+        return toDto(withName(updated), attachment);
     }
 
     private void validateTransition(PlaceReportStatus current, PlaceReportStatus target) {
@@ -277,15 +280,19 @@ public class PlaceReportService {
 
     private Optional<ReportRow> findReportRow(UUID reportId) {
         return jdbc.sql("""
-                SELECT pr.id, pr.place_id, p.name AS place_name, pr.reason, pr.description, pr.file_id,
+                SELECT pr.id, pr.place_id, CAST(NULL AS text) AS place_name, pr.reason, pr.description, pr.file_id,
                        pr.sender_user_id, pr.assignee_id, pr.status, pr.resolution_note, pr.created_at, pr.updated_at
                 FROM place_report pr
-                JOIN place p ON p.id = pr.place_id
                 WHERE pr.id = :id
                 """)
                 .param("id", reportId)
                 .query((rs, rowNum) -> mapReportRow(rs))
                 .optional();
+    }
+
+    /** Tên địa điểm lấy qua PlaceLookupService của phần B, không JOIN thẳng bảng place. */
+    private ReportRow withName(ReportRow row) {
+        return row.withPlaceName(placeLookup.names(List.of(row.placeId())).get(row.placeId()));
     }
 
     private PlaceReport toDto(ReportRow row, @Nullable StoredFile attachment) {
@@ -334,5 +341,11 @@ public class PlaceReportService {
             String status,
             @Nullable String resolutionNote,
             OffsetDateTime createdAt,
-            @Nullable OffsetDateTime updatedAt) {}
+            @Nullable OffsetDateTime updatedAt) {
+
+        ReportRow withPlaceName(String name) {
+            return new ReportRow(id, placeId, name, reason, description, fileId, senderUserId, assigneeId, status,
+                    resolutionNote, createdAt, updatedAt);
+        }
+    }
 }

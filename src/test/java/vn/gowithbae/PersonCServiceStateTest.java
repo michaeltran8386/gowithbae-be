@@ -180,7 +180,8 @@ class PersonCServiceStateTest {
                 placeQueryService,
                 mock(StoredFileLookup.class),
                 mock(AuditService.class),
-                mock(RequestRateLimiter.class));
+                mock(RequestRateLimiter.class),
+                mock(vn.gowithbae.place.PlaceLookupService.class));
         assertThatThrownBy(() -> reportService.submitReport(placeId, new PlaceReportCreate(PlaceReportReason.OTHER)))
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(ex -> ((ResponseStatusException) ex).getStatusCode())
