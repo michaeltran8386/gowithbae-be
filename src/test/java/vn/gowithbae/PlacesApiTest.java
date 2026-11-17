@@ -1,6 +1,7 @@
 package vn.gowithbae;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -81,7 +82,8 @@ class PlacesApiTest {
 
     @Test
     void unimplementedOperationReturns501AndPrivateRequiresAuth() throws Exception {
-        mvc.perform(get("/api/v1/taxonomies")).andExpect(status().isNotImplemented());
+        mvc.perform(post("/api/v1/places/{id}/reports", java.util.UUID.randomUUID())
+                .contentType("application/json").content("{\"reason\":\"OTHER\"}")).andExpect(status().isNotImplemented());
         mvc.perform(get("/api/v1/me")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/v1/admin/places")).andExpect(status().isUnauthorized());
     }

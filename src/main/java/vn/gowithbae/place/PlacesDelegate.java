@@ -1,56 +1,60 @@
 package vn.gowithbae.place;
 
 import java.text.Normalizer;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
-import org.springframework.web.server.ResponseStatusException;
 
 import vn.gowithbae.api.PlacesApiDelegate;
-import vn.gowithbae.api.model.ActiveStatus;
 import vn.gowithbae.api.model.BudgetBand;
-import vn.gowithbae.api.model.KnownStatus;
 import vn.gowithbae.api.model.PageMeta;
 import vn.gowithbae.api.model.PlaceCard;
+import vn.gowithbae.api.model.PlaceDetail;
 import vn.gowithbae.api.model.PlaceSearchPage;
-import vn.gowithbae.api.model.Price;
-import vn.gowithbae.api.model.Taxonomy;
 import vn.gowithbae.api.model.TaxonomyGroup;
+import vn.gowithbae.common.web.Problems;
 
 /**
- * GET /places — endpoint mẫu chạy thật (FR-02, FR-03 phần khu vực/ngân sách, FR-04 phần sắp xếp).
- * Các operation khác của tag Places vẫn trả 501 từ default method của PlacesApiDelegate.
+ * Tìm/lọc, chi tiết, so sánh địa điểm công khai (FR-02..06, RULE-01..06).
+ * {@code reportPlace} thuộc phần báo sai (thành viên C), vẫn trả 501 từ default method.
  */
 @Service
 public class PlacesDelegate implements PlacesApiDelegate {
 
-    private final JdbcClient jdbc;
+    /** Trong nhóm: chỉ cần khớp một nhãn (RULE-02). Các nhóm còn lại (VIBE/FEATURE/AMENITY) phải khớp đủ. */
+    private static final Set<TaxonomyGroup> ANY_OF_GROUPS =
+            Set.of(TaxonomyGroup.ACTIVITY, TaxonomyGroup.STYLE, TaxonomyGroup.SCENERY, TaxonomyGroup.OCCASION);
 
-    public PlacesDelegate(JdbcClient jdbc) {
+    private final JdbcClient jdbc;
+    private final PlaceReader reader;
+
+    public PlacesDelegate(JdbcClient jdbc, PlaceReader reader) {
         this.jdbc = jdbc;
+        this.reader = reader;
     }
 
     @Override
     public ResponseEntity<PlaceSearchPage> searchPlaces(String q, UUID areaId, Double lat, Double lng, Double radiusKm,
             BudgetBand budget, OffsetDateTime at, List<UUID> tagIds, String sort, Integer page, Integer size) {
-        // shortcut: lọc nhãn (RULE-02), giờ mở cửa (RULE-05), vị trí/NEAREST (OQ-05) chưa làm; trả 501 thay vì bỏ qua âm thầm.
-        if (lat != null || lng != null || radiusKm != null || at != null
-                || (tagIds != null && !tagIds.isEmpty()) || "NEAREST".equals(sort)) {
-            throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Bộ lọc vị trí/giờ/nhãn chưa được triển khai");
-        }
+        boolean hasOrigin = validateOrigin(lat, lng, radiusKm, sort);
         int p = page == null ? 0 : page;
         int s = size == null ? 20 : size;
 
         var where = new StringBuilder("p.status = 'PUBLISHED'");
-        var params = new java.util.HashMap<String, Object>();
+        var params = new HashMap<String, Object>();
         String needle = normalize(q);
         if (!needle.isEmpty()) {
             where.append(" AND p.search_text LIKE :q ESCAPE '\\'");
@@ -70,66 +74,165 @@ public class PlacesDelegate implements PlacesApiDelegate {
                 case OVER_700_K -> "pp.standard_for_two > 700000";
             });
         }
-        String orderBy = "PRICE_ASC".equals(sort)
-                ? "pp.standard_for_two ASC NULLS LAST, p.code" // giá chưa rõ xếp cuối (FR-04)
-                : "p.verified_at DESC NULLS LAST, p.code";
+        if (tagIds != null && !tagIds.isEmpty()) {
+            appendTagFilter(tagIds, where, params);
+        }
+        if (at != null) {
+            appendOpenAtFilter(at, where, params);
+        }
+        if (hasOrigin) {
+            params.put("originLat", lat);
+            params.put("originLng", lng);
+            if (radiusKm != null) {
+                where.append(" AND ").append(PlaceReader.DISTANCE_KM).append(" <= :radiusKm");
+                params.put("radiusKm", radiusKm);
+            }
+        }
 
-        String from = " FROM place p LEFT JOIN place_price pp ON pp.place_id = p.id"
-                + " LEFT JOIN area a ON a.id = p.area_id WHERE " + where;
+        // shortcut: OQ-04 chưa có công thức mức khớp; DEFAULT xếp theo ngày kiểm tra mới nhất.
+        String orderBy = switch (sort == null ? "DEFAULT" : sort) {
+            case "PRICE_ASC" -> "pp.standard_for_two ASC NULLS LAST, p.code"; // giá chưa rõ xếp cuối (FR-04)
+            case "NEAREST" -> "distance_km ASC, p.code";
+            default -> "p.verified_at DESC NULLS LAST, p.code";
+        };
 
+        String from = PlaceReader.CARD_FROM + " WHERE " + where;
         long total = jdbc.sql("SELECT count(*)" + from).params(params).query(Long.class).single();
 
-        List<PlaceCard> items = jdbc.sql("""
-                SELECT p.id, p.name, p.lat, p.lng, a.name AS area_name,
-                       coalesce(pp.status, 'UNKNOWN') AS price_status, pp.standard_for_two, pp.min_price, pp.max_price,
-                       pp.includes, pp.verified_at AS price_verified_at
-                """ + from + " ORDER BY " + orderBy + " LIMIT :limit OFFSET :offset")
+        String distance = hasOrigin ? PlaceReader.DISTANCE_KM : "CAST(NULL AS double precision)";
+        List<PlaceCard> items = jdbc.sql("SELECT " + PlaceReader.CARD_COLUMNS + ", " + distance + " AS distance_km"
+                        + from + " ORDER BY " + orderBy + " LIMIT :limit OFFSET :offset")
                 .params(params)
                 .param("limit", s)
                 .param("offset", (long) p * s)
-                .query((rs, i) -> {
-                    var price = new Price(KnownStatus.fromValue(rs.getString("price_status")))
-                            .standardForTwo(rs.getObject("standard_for_two", Long.class))
-                            .min(rs.getObject("min_price", Long.class))
-                            .max(rs.getObject("max_price", Long.class))
-                            .includes(rs.getString("includes"))
-                            .verifiedAt(rs.getObject("price_verified_at", java.time.LocalDate.class));
-                    return new PlaceCard(rs.getObject("id", UUID.class), rs.getString("name"), price, new ArrayList<>())
-                            .areaName(rs.getString("area_name"))
-                            .lat(rs.getDouble("lat"))
-                            .lng(rs.getDouble("lng"));
-                })
+                .query((rs, i) -> reader.mapCardWithDistance(rs))
                 .list();
 
-        attachTags(items);
+        reader.attachTags(items);
 
         var meta = new PageMeta(p, s, total, (int) ((total + s - 1) / s));
         return ResponseEntity.ok(new PlaceSearchPage(UUID.randomUUID(), items, meta));
     }
 
-    /** Tối đa 3 nhãn đang dùng trên thẻ (FR-02). */
-    private void attachTags(List<PlaceCard> items) {
-        if (items.isEmpty()) {
-            return;
+    /** Chỉ địa điểm đang công khai; ẩn/ngừng/nháp đều 404 (PROP OQ-11). */
+    @Override
+    public ResponseEntity<PlaceDetail> getPlace(UUID placeId) {
+        List<PlaceDetail> found = reader.details(List.of(placeId), null, null, true);
+        if (found.isEmpty()) {
+            throw Problems.notFound();
         }
-        Map<UUID, PlaceCard> byId = items.stream().collect(Collectors.toMap(PlaceCard::getId, c -> c));
-        jdbc.sql("""
-                SELECT place_id, id, group_code, code, name FROM (
-                  SELECT pt.place_id, t.id, t.group_code, t.code, t.name,
-                         row_number() OVER (PARTITION BY pt.place_id ORDER BY t.group_code, t.code) AS rn
-                  FROM place_tag pt JOIN taxonomy t ON t.id = pt.taxonomy_id
-                  WHERE pt.place_id IN (:ids) AND t.status = 'ACTIVE' AND t.group_code <> 'CATEGORY'
-                ) x WHERE rn <= 3
-                """)
-                .param("ids", byId.keySet())
+        return ResponseEntity.ok(found.getFirst());
+    }
+
+    /** Đúng 2–3 địa điểm khác nhau, đều đang công khai (RULE-06); giữ thứ tự theo {@code ids}. */
+    @Override
+    public ResponseEntity<List<PlaceDetail>> comparePlaces(Set<UUID> ids, Double lat, Double lng) {
+        // Set đã gộp id trùng: "a,a" thành 1 phần tử và bị chặn ở đây.
+        if (ids == null || ids.size() < 2 || ids.size() > 3) {
+            throw Problems.badRequest("Cần chọn 2 đến 3 địa điểm khác nhau",
+                    List.of(Problems.fieldError("ids", "Số địa điểm khác nhau phải từ 2 đến 3")));
+        }
+        if ((lat == null) != (lng == null)) {
+            throw Problems.badRequest("lat và lng phải đi cùng nhau",
+                    List.of(Problems.fieldError(lat == null ? "lat" : "lng", "Thiếu tọa độ còn lại")));
+        }
+        List<PlaceDetail> found = reader.details(new ArrayList<>(ids), lat, lng, true);
+        if (found.size() != ids.size()) {
+            throw Problems.notFound();
+        }
+        return ResponseEntity.ok(found);
+    }
+
+    /**
+     * Điểm gốc do người dùng cung cấp. shortcut: OQ-05 — NEAREST và bán kính bắt buộc có điểm gốc,
+     * không tự đoán vị trí; khu vực và bán kính kết hợp AND.
+     */
+    private static boolean validateOrigin(Double lat, Double lng, Double radiusKm, String sort) {
+        if ((lat == null) != (lng == null)) {
+            throw Problems.badRequest("lat và lng phải đi cùng nhau",
+                    List.of(Problems.fieldError(lat == null ? "lat" : "lng", "Thiếu tọa độ còn lại")));
+        }
+        boolean hasOrigin = lat != null;
+        if (radiusKm != null && !hasOrigin) {
+            throw Problems.badRequest("Lọc bán kính cần điểm gốc",
+                    List.of(Problems.fieldError("radiusKm", "Cần lat và lng")));
+        }
+        if ("NEAREST".equals(sort) && !hasOrigin) {
+            throw Problems.badRequest("Sắp xếp gần nhất cần điểm gốc",
+                    List.of(Problems.fieldError("sort", "Cần lat và lng")));
+        }
+        return hasOrigin;
+    }
+
+    /**
+     * RULE-02: các nhóm kết hợp AND; ACTIVITY/STYLE/SCENERY/OCCASION khớp một trong các nhãn chọn;
+     * VIBE/FEATURE/AMENITY phải có đủ mọi nhãn chọn; CATEGORY so với loại hình chính của địa điểm.
+     */
+    private void appendTagFilter(List<UUID> tagIds, StringBuilder where, Map<String, Object> params) {
+        Map<TaxonomyGroup, List<UUID>> byGroup = new LinkedHashMap<>();
+        jdbc.sql("SELECT id, group_code FROM taxonomy WHERE id IN (:ids) ORDER BY group_code")
+                .param("ids", Set.copyOf(tagIds))
                 .query(rs -> {
-                    byId.get(rs.getObject("place_id", UUID.class)).addTagsItem(new Taxonomy(
-                            rs.getObject("id", UUID.class),
-                            TaxonomyGroup.fromValue(rs.getString("group_code")),
-                            rs.getString("code"),
-                            rs.getString("name"),
-                            ActiveStatus.ACTIVE));
+                    byGroup.computeIfAbsent(TaxonomyGroup.fromValue(rs.getString("group_code")), g -> new ArrayList<>())
+                            .add(rs.getObject("id", UUID.class));
                 });
+        long found = byGroup.values().stream().mapToLong(List::size).sum();
+        if (found != Set.copyOf(tagIds).size()) {
+            throw Problems.badRequest("Có nhãn không tồn tại",
+                    List.of(Problems.fieldError("tagIds", "Có mã nhãn không tồn tại")));
+        }
+        byGroup.forEach((group, ids) -> {
+            String key = "tags_" + group.getValue();
+            params.put(key, ids);
+            if (group == TaxonomyGroup.CATEGORY) {
+                where.append(" AND p.category_id IN (:").append(key).append(")");
+            } else if (ANY_OF_GROUPS.contains(group)) {
+                where.append(" AND EXISTS (SELECT 1 FROM place_tag pt WHERE pt.place_id = p.id AND pt.taxonomy_id IN (:")
+                        .append(key).append("))");
+            } else {
+                where.append(" AND (SELECT count(DISTINCT pt.taxonomy_id) FROM place_tag pt")
+                        .append(" WHERE pt.place_id = p.id AND pt.taxonomy_id IN (:").append(key).append(")) = ")
+                        .append(ids.size());
+            }
+        });
+    }
+
+    /**
+     * RULE-05: chỉ nơi đã xác minh giờ và đang mở tại {@code at} (giờ Việt Nam). Giờ chưa rõ không đạt (RULE-04).
+     * Ngày có ngoại lệ thì dùng ngoại lệ thay lịch tuần (PROP). Khoảng mở: opens ≤ t < closes.
+     * shortcut: OQ-04 — khoảng có closes ≤ opens là qua đêm: đạt khi t ≥ opens trong ngày đó, hoặc t < closes
+     * của khoảng qua đêm ngày hôm trước (ngày hôm trước cũng ưu tiên ngoại lệ). Chưa lọc theo thời lượng.
+     */
+    private static void appendOpenAtFilter(OffsetDateTime at, StringBuilder where, Map<String, Object> params) {
+        ZonedDateTime local = at.atZoneSameInstant(PlaceReader.VN);
+        LocalDate date = local.toLocalDate();
+        LocalDate prev = date.minusDays(1);
+        params.put("atDate", date);
+        params.put("atDow", date.getDayOfWeek().getValue());
+        params.put("atPrevDate", prev);
+        params.put("atPrevDow", prev.getDayOfWeek().getValue());
+        params.put("atTime", LocalTime.of(local.getHour(), local.getMinute(), local.getSecond()));
+        where.append("""
+                 AND p.hours_status = 'KNOWN' AND (
+                   (CASE WHEN EXISTS (SELECT 1 FROM date_exception e WHERE e.place_id = p.id AND e.on_date = :atDate)
+                     THEN EXISTS (SELECT 1 FROM date_exception e WHERE e.place_id = p.id AND e.on_date = :atDate
+                                  AND NOT e.closed AND (
+                                    (e.opens_at < e.closes_at AND :atTime >= e.opens_at AND :atTime < e.closes_at)
+                                    OR (e.closes_at <= e.opens_at AND :atTime >= e.opens_at)))
+                     ELSE EXISTS (SELECT 1 FROM opening_hours h WHERE h.place_id = p.id AND h.day_of_week = :atDow
+                                  AND (
+                                    (h.opens_at < h.closes_at AND :atTime >= h.opens_at AND :atTime < h.closes_at)
+                                    OR (h.closes_at <= h.opens_at AND :atTime >= h.opens_at)))
+                   END)
+                   OR
+                   (CASE WHEN EXISTS (SELECT 1 FROM date_exception e WHERE e.place_id = p.id AND e.on_date = :atPrevDate)
+                     THEN EXISTS (SELECT 1 FROM date_exception e WHERE e.place_id = p.id AND e.on_date = :atPrevDate
+                                  AND NOT e.closed AND e.closes_at <= e.opens_at AND :atTime < e.closes_at)
+                     ELSE EXISTS (SELECT 1 FROM opening_hours h WHERE h.place_id = p.id AND h.day_of_week = :atPrevDow
+                                  AND h.closes_at <= h.opens_at AND :atTime < h.closes_at)
+                   END)
+                 )
+                """);
     }
 
     /** Bỏ dấu tiếng Việt + lowercase; cùng quy tắc phải dùng khi ghi place.search_text. */
@@ -138,6 +241,6 @@ public class PlacesDelegate implements PlacesApiDelegate {
             return "";
         }
         String noMarks = Normalizer.normalize(s.trim(), Normalizer.Form.NFD).replaceAll("\\p{M}", "");
-        return noMarks.replace('đ', 'd').replace('Đ', 'D').toLowerCase(java.util.Locale.ROOT);
+        return noMarks.replace('đ', 'd').replace('Đ', 'D').toLowerCase(Locale.ROOT);
     }
 }
