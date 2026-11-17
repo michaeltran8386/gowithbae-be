@@ -10,6 +10,7 @@ import org.springframework.web.server.ResponseStatusException;
 import vn.gowithbae.api.model.PlaceVisitCount;
 import vn.gowithbae.common.ActorResolver;
 import vn.gowithbae.common.ActorResolver.UserPrincipal;
+import vn.gowithbae.place.PlaceLookupService;
 
 /** Đếm số lần tự xác nhận đã đi (YES hợp lệ) theo tài khoản + chi nhánh (UC-027, FR-35, RULE-29). */
 @Service
@@ -17,8 +18,10 @@ public class VisitCountService {
 
     private final JdbcClient jdbc;
     private final ActorResolver actorResolver;
+    private final PlaceLookupService places;
 
-    public VisitCountService(JdbcClient jdbc, ActorResolver actorResolver) {
+    public VisitCountService(JdbcClient jdbc, ActorResolver actorResolver, PlaceLookupService places) {
+        this.places = places;
         this.jdbc = jdbc;
         this.actorResolver = actorResolver;
     }
@@ -26,16 +29,7 @@ public class VisitCountService {
     public PlaceVisitCount getMyPlaceVisitCount(UUID placeId) {
         UserPrincipal user = actorResolver.requireActiveUser();
 
-        Boolean placeExists = jdbc.sql("""
-                SELECT EXISTS (
-                    SELECT 1 FROM place
-                    WHERE id = :placeId AND status IN ('PUBLISHED', 'HIDDEN', 'INACTIVE')
-                )
-                """)
-                .param("placeId", placeId)
-                .query(Boolean.class)
-                .single();
-        if (!Boolean.TRUE.equals(placeExists)) {
+        if (!places.everPublished(placeId)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Địa điểm không tồn tại");
         }
 

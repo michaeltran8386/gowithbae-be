@@ -174,6 +174,11 @@ public class DatePlanService {
         return toDto(access.plan(), place, access.viewerRole());
     }
 
+    /**
+     * Chỉ chủ kế hoạch được sửa/hủy; bên còn lại là khách qua recipient_session (không có tài khoản/hộp thư trong app).
+     * Vì vậy chưa phát NotificationService.Type.DATE_PLAN_UPDATED/CANCELLED: không có người nhận khác người thao tác.
+     * Khi PO cho người nhận gắn tài khoản (OQ-09/14), gửi thông báo cho họ ngay sau UPDATE trong cùng transaction.
+     */
     @Transactional
     public DatePlan updatePlan(UUID planId, DatePlanUpdate req) {
         UserPrincipal owner = actorResolver.requireActiveUser();
