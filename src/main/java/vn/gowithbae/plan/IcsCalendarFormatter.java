@@ -21,7 +21,7 @@ public class IcsCalendarFormatter {
     public String formatEvent(
             UUID planId,
             String placeName,
-            String address,
+            @Nullable String address,
             OffsetDateTime scheduledAt,
             OffsetDateTime now,
             @Nullable String note,
@@ -58,7 +58,9 @@ public class IcsCalendarFormatter {
         sb.append("DTSTART;TZID=Asia/Ho_Chi_Minh:").append(startVn.format(LOCAL_FMT)).append("\r\n");
         sb.append("DTEND;TZID=Asia/Ho_Chi_Minh:").append(endVn.format(LOCAL_FMT)).append("\r\n");
         sb.append("SUMMARY:").append(escape("Hẹn tại " + placeName)).append("\r\n");
-        sb.append("LOCATION:").append(escape(address)).append("\r\n");
+        if (address != null && !address.isBlank()) {
+            sb.append("LOCATION:").append(escape(address)).append("\r\n");
+        }
         sb.append("DESCRIPTION:").append(escape(desc.toString())).append("\r\n");
         sb.append("STATUS:").append(cancelled ? "CANCELLED" : "CONFIRMED").append("\r\n");
         sb.append("END:VEVENT\r\n");
@@ -66,7 +68,10 @@ public class IcsCalendarFormatter {
         return sb.toString();
     }
 
-    private String escape(String text) {
+    private String escape(@Nullable String text) {
+        if (text == null) {
+            return "";
+        }
         return text
                 .replace("\\", "\\\\")
                 .replace("\r\n", "\\n")

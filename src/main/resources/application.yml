@@ -18,6 +18,7 @@ spring:
     enabled: true
   jackson:
     time-zone: Asia/Ho_Chi_Minh
+  # Giới hạn multipart đặt trong application-uploads.yml (5 MB), đủ cho CSV nhập địa điểm (tự giới hạn 2 MB).
   mail:
     host: ${SMTP_HOST:localhost}
     port: ${SMTP_PORT:587}
@@ -40,7 +41,7 @@ app:
   auth:
     mfa-key: ${AUTH_MFA_KEY:${app.jwt.secret}}
   files:
-    # URL gốc để ghép với stored_file.storage_key (OQ-21 chưa chọn nơi lưu). Để trống = API trả coverUrl/url null.
+    # URL gốc để ghép với stored_file.storage_key (OQ-21 chưa có URL công khai). Để trống = API trả coverUrl/url null.
     public-base-url: ${FILES_PUBLIC_BASE_URL:}
 
 management:

@@ -18,13 +18,15 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Service;
 
+import vn.gowithbae.api.model.KnownStatus;
 import vn.gowithbae.api.model.PlaceCard;
+import vn.gowithbae.api.model.Price;
 import vn.gowithbae.common.TimeHelper;
 import vn.gowithbae.place.PlaceReader;
 
 /**
  * Truy vấn đọc địa điểm, danh sách đã lưu và giờ mở cửa phục vụ các module của Người C,
- * dùng lại {@link PlaceReader} (phần B) để thẻ địa điểm và {@code coverUrl} đồng nhất toàn hệ thống.
+ * dùng lại {@link PlaceReader} (phần B) và tuân thủ quy tắc ẩn dữ liệu khi địa điểm không còn {@code PUBLISHED} (PROP OQ-11).
  */
 @Service
 public class PlaceCatalogService {
@@ -38,7 +40,7 @@ public class PlaceCatalogService {
     public record PlaceSummary(
             UUID id,
             String name,
-            String address,
+            @Nullable String address,
             String status,
             String hoursStatus,
             PlaceCard card) {
@@ -65,33 +67,69 @@ public class PlaceCatalogService {
             return Collections.emptyMap();
         }
         Set<UUID> distinctIds = Set.copyOf(placeIds);
-        List<PlaceSummary> rows = jdbc.sql("SELECT p.address, p.status, p.hours_status, "
-                        + PlaceReader.CARD_COLUMNS + PlaceReader.CARD_FROM + " WHERE p.id IN (:ids)")
+        record MetaRow(UUID id, String name, String status, String hoursStatus) {}
+        List<MetaRow> metaRows = jdbc.sql("""
+                SELECT id, name, status, hours_status
+                FROM place
+                WHERE id IN (:ids)
+                """)
                 .param("ids", distinctIds)
-                .query((rs, rowNum) -> {
-                    PlaceCard card = placeReader.mapCard(rs);
-                    return new PlaceSummary(
-                            card.getId(),
-                            card.getName(),
-                            rs.getString("address"),
-                            rs.getString("status"),
-                            rs.getString("hours_status"),
-                            card);
-                })
+                .query((rs, rowNum) -> new MetaRow(
+                        rs.getObject("id", UUID.class),
+                        rs.getString("name"),
+                        rs.getString("status"),
+                        rs.getString("hours_status")))
                 .list();
 
-        if (rows.isEmpty()) {
+        if (metaRows.isEmpty()) {
             return Collections.emptyMap();
         }
 
-        List<PlaceCard> cards = new ArrayList<>(rows.size());
+        List<UUID> publishedIds = new ArrayList<>();
         Map<UUID, PlaceSummary> byId = new LinkedHashMap<>();
-        for (PlaceSummary summary : rows) {
-            cards.add(summary.card());
-            byId.put(summary.id(), summary);
+        for (MetaRow row : metaRows) {
+            if ("PUBLISHED".equals(row.status())) {
+                publishedIds.add(row.id());
+            } else {
+                // Khớp PROP OQ-11 của PlaceQueryServiceImpl: chỉ giữ id và tên, không lộ giá/ảnh/nhãn/địa chỉ.
+                byId.put(row.id(), new PlaceSummary(
+                        row.id(),
+                        row.name(),
+                        null,
+                        row.status(),
+                        "UNKNOWN",
+                        unavailableCard(row.id(), row.name())));
+            }
         }
-        placeReader.attachTags(cards);
+
+        if (!publishedIds.isEmpty()) {
+            List<PlaceSummary> publishedSummaries = jdbc.sql("SELECT p.address, p.status, p.hours_status, "
+                            + PlaceReader.CARD_COLUMNS + PlaceReader.CARD_FROM + " WHERE p.id IN (:ids)")
+                    .param("ids", publishedIds)
+                    .query((rs, rowNum) -> {
+                        PlaceCard card = placeReader.mapCard(rs);
+                        return new PlaceSummary(
+                                card.getId(),
+                                card.getName(),
+                                rs.getString("address"),
+                                rs.getString("status"),
+                                rs.getString("hours_status"),
+                                card);
+                    })
+                    .list();
+            List<PlaceCard> cards = new ArrayList<>(publishedSummaries.size());
+            for (PlaceSummary summary : publishedSummaries) {
+                cards.add(summary.card());
+                byId.put(summary.id(), summary);
+            }
+            placeReader.attachTags(cards);
+        }
+
         return byId;
+    }
+
+    public static PlaceCard unavailableCard(UUID placeId, String name) {
+        return new PlaceCard(placeId, name, new Price(KnownStatus.UNKNOWN), new ArrayList<>());
     }
 
     public boolean areAllPlacesSavedByUser(UUID userId, Set<UUID> placeIds) {

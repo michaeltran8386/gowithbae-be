@@ -18,14 +18,16 @@ import vn.gowithbae.api.model.ImportBatch;
 public class AdminImportsDelegate implements AdminImportsApiDelegate {
 
     private final AdminImportService service;
+    private final AdminPermissions permissions;
 
-    public AdminImportsDelegate(AdminImportService service) {
+    public AdminImportsDelegate(AdminImportService service, AdminPermissions permissions) {
         this.service = service;
+        this.permissions = permissions;
     }
 
     @Override
     public ResponseEntity<String> adminDownloadImportTemplate() {
-        AdminPermissions.requireContentEdit();
+        permissions.requireContentEdit();
         return ResponseEntity.ok()
                 .contentType(new MediaType("text", "csv", java.nio.charset.StandardCharsets.UTF_8))
                 .header(HttpHeaders.CONTENT_DISPOSITION,
@@ -35,19 +37,19 @@ public class AdminImportsDelegate implements AdminImportsApiDelegate {
 
     @Override
     public ResponseEntity<ImportBatch> adminValidateImport(MultipartFile file) {
-        AdminPermissions.requireContentEdit();
+        permissions.requireContentEdit();
         return ResponseEntity.status(HttpStatus.CREATED).body(service.validate(file));
     }
 
     @Override
     public ResponseEntity<ImportBatch> adminGetImport(UUID batchId) {
-        AdminPermissions.requireContentRead();
+        permissions.requireContentRead();
         return ResponseEntity.ok(service.get(batchId));
     }
 
     @Override
     public ResponseEntity<ImportBatch> adminCommitImport(UUID batchId) {
-        AdminPermissions.requireContentEdit();
+        permissions.requireContentEdit();
         return ResponseEntity.ok(service.commit(batchId));
     }
 }

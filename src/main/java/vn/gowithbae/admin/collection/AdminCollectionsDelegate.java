@@ -19,9 +19,9 @@ import vn.gowithbae.admin.AdminPermissions;
 import vn.gowithbae.api.AdminCollectionsApiDelegate;
 import vn.gowithbae.api.model.CollectionDetail;
 import vn.gowithbae.api.model.CollectionWrite;
-import vn.gowithbae.common.audit.AuditService;
+import vn.gowithbae.platform.AuditService;
 import vn.gowithbae.common.files.FileUrls;
-import vn.gowithbae.common.security.CurrentUser;
+import vn.gowithbae.platform.CurrentUser;
 import vn.gowithbae.common.web.Problems;
 import vn.gowithbae.place.PlaceReader;
 
@@ -38,7 +38,13 @@ public class AdminCollectionsDelegate implements AdminCollectionsApiDelegate {
     private final FileUrls fileUrls;
     private final AuditService audit;
 
-    public AdminCollectionsDelegate(JdbcClient jdbc, PlaceReader placeReader, FileUrls fileUrls, AuditService audit) {
+    private final CurrentUser currentUser;
+    private final AdminPermissions permissions;
+
+    public AdminCollectionsDelegate(JdbcClient jdbc, PlaceReader placeReader, FileUrls fileUrls, AuditService audit,
+            CurrentUser currentUser, AdminPermissions permissions) {
+        this.currentUser = currentUser;
+        this.permissions = permissions;
         this.jdbc = jdbc;
         this.placeReader = placeReader;
         this.fileUrls = fileUrls;
@@ -47,7 +53,7 @@ public class AdminCollectionsDelegate implements AdminCollectionsApiDelegate {
 
     @Override
     public ResponseEntity<List<CollectionDetail>> adminListCollections() {
-        AdminPermissions.requireContentRead();
+        permissions.requireContentRead();
         List<UUID> ids = jdbc.sql("SELECT id FROM collection ORDER BY updated_at DESC, id").query(UUID.class).list();
         return ResponseEntity.ok(load(ids));
     }
@@ -55,25 +61,25 @@ public class AdminCollectionsDelegate implements AdminCollectionsApiDelegate {
     @Override
     @Transactional
     public ResponseEntity<CollectionDetail> adminCreateCollection(CollectionWrite body) {
-        AdminPermissions.requireContentEdit();
+        permissions.requireContentEdit();
         validate(body);
         UUID id = jdbc.sql("""
                 INSERT INTO collection (title, body, cover_file_id, visible_from, visible_until, created_by)
                 VALUES (:title, :body, :cover, :from, :until, :actor) RETURNING id
                 """)
                 .params(params(body))
-                .param("actor", CurrentUser.id())
+                .param("actor", currentUser.id())
                 .query(UUID.class)
                 .single();
         writeItems(id, body.getPlaceIds());
-        audit.log(CurrentUser.id(), "COLLECTION_CREATE", "collection", id, null, summary(id), null);
+        audit.log(currentUser.id(), "COLLECTION_CREATE", "collection", id.toString(), null, summary(id), null);
         return ResponseEntity.status(HttpStatus.CREATED).body(load(List.of(id)).getFirst());
     }
 
     @Override
     @Transactional
     public ResponseEntity<CollectionDetail> adminUpdateCollection(UUID collectionId, CollectionWrite body) {
-        AdminPermissions.requireContentEdit();
+        permissions.requireContentEdit();
         Map<String, Object> before = summary(collectionId);
         validate(body);
         jdbc.sql("""
@@ -85,7 +91,7 @@ public class AdminCollectionsDelegate implements AdminCollectionsApiDelegate {
                 .param("id", collectionId)
                 .update();
         writeItems(collectionId, body.getPlaceIds());
-        audit.log(CurrentUser.id(), "COLLECTION_UPDATE", "collection", collectionId, before, summary(collectionId), null);
+        audit.log(currentUser.id(), "COLLECTION_UPDATE", "collection", collectionId.toString(), before, summary(collectionId), null);
         return ResponseEntity.ok(load(List.of(collectionId)).getFirst());
     }
 
@@ -93,10 +99,10 @@ public class AdminCollectionsDelegate implements AdminCollectionsApiDelegate {
     @Override
     @Transactional
     public ResponseEntity<Void> adminDeleteCollection(UUID collectionId) {
-        AdminPermissions.requireContentEdit();
+        permissions.requireContentEdit();
         Map<String, Object> before = summary(collectionId);
         jdbc.sql("DELETE FROM collection WHERE id = :id").param("id", collectionId).update();
-        audit.log(CurrentUser.id(), "COLLECTION_DELETE", "collection", collectionId, before, null, null);
+        audit.log(currentUser.id(), "COLLECTION_DELETE", "collection", collectionId.toString(), before, null, null);
         return ResponseEntity.noContent().build();
     }
 

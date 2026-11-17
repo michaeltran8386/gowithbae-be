@@ -1,0 +1,51 @@
+spring:
+  application:
+    name: gowithbae-be
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - classpath:application-uploads.yml
+  datasource:
+    # Supabase: Project Settings → Database → Connection string (JDBC). Dùng session pooler (port 5432) hoặc direct.
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+  jackson:
+    time-zone: Asia/Ho_Chi_Minh
+  # Giới hạn multipart đặt trong application-uploads.yml (5 MB), đủ cho CSV nhập địa điểm (tự giới hạn 2 MB).
+  mail:
+    host: ${SMTP_HOST:localhost}
+    port: ${SMTP_PORT:587}
+    username: ${SMTP_USERNAME:}
+    password: ${SMTP_PASSWORD:}
+    properties:
+      mail.smtp.auth: ${SMTP_AUTH:true}
+      mail.smtp.starttls.enable: ${SMTP_STARTTLS:true}
+      mail.smtp.starttls.required: ${SMTP_STARTTLS:true}
+      mail.smtp.connectiontimeout: 5000
+      mail.smtp.timeout: 5000
+      mail.smtp.writetimeout: 5000
+      mail.debug: false
+
+app:
+  jwt:
+    secret: ${JWT_SECRET}
+  mail:
+    from: ${SMTP_FROM:}
+  auth:
+    mfa-key: ${AUTH_MFA_KEY:${app.jwt.secret}}
+  files:
+    # URL gốc để ghép với stored_file.storage_key (OQ-21 chưa có URL công khai). Để trống = API trả coverUrl/url null.
+    public-base-url: ${FILES_PUBLIC_BASE_URL:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

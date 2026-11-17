@@ -210,6 +210,16 @@ class PersonCIntegrationTest {
         mvc.perform(get("/api/v1/date-plans/{pid}", planId)
                         .header("X-Recipient-Session", guestSession))
                 .andExpect(status().isNotFound());
+
+        jdbc.sql("UPDATE place SET status = 'HIDDEN' WHERE id = :pid").param("pid", openPlaceId).update();
+        mvc.perform(get("/api/v1/date-plans/{pid}", planId)
+                        .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.placeAvailable").value(false))
+                .andExpect(jsonPath("$.warnings[0].code").value("PLACE_UNAVAILABLE"))
+                .andExpect(jsonPath("$.place.name").value("Bistro Ánh Nến"))
+                .andExpect(jsonPath("$.place.price.status").value("UNKNOWN"))
+                .andExpect(jsonPath("$.place.areaName").doesNotExist());
     }
 
     @Test

@@ -2,33 +2,34 @@ package vn.gowithbae;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.List;
+import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.ErrorResponseException;
 import org.springframework.web.server.ResponseStatusException;
 
 import tools.jackson.databind.json.JsonMapper;
+import vn.gowithbae.admin.AdminPermissions;
 import vn.gowithbae.api.model.CreateChoiceSessionRequest;
 import vn.gowithbae.api.model.DatePlanWrite;
 import vn.gowithbae.api.model.JoinShareGrantRequest;
+import vn.gowithbae.api.model.KnownStatus;
 import vn.gowithbae.api.model.PageMeta;
+import vn.gowithbae.api.model.PlaceCard;
+import vn.gowithbae.api.model.PlaceReportCreate;
+import vn.gowithbae.api.model.PlaceReportReason;
 import vn.gowithbae.api.model.SupportTicketCreate;
 import vn.gowithbae.choice.ChoiceSessionService;
 import vn.gowithbae.common.ActorResolver;
@@ -41,7 +42,11 @@ import vn.gowithbae.place.PlaceReader;
 import vn.gowithbae.plan.DatePlanService;
 import vn.gowithbae.plan.IcsCalendarFormatter;
 import vn.gowithbae.platform.AuditService;
+import vn.gowithbae.platform.CurrentUser;
 import vn.gowithbae.platform.NotificationService;
+import vn.gowithbae.platform.PlaceQueryService;
+import vn.gowithbae.platform.RequestRateLimiter;
+import vn.gowithbae.report.PlaceReportService;
 import vn.gowithbae.shared.PlaceCatalogService;
 import vn.gowithbae.shared.StoredFileLookup;
 import vn.gowithbae.support.SupportService;
@@ -142,42 +147,63 @@ class PersonCServiceStateTest {
     }
 
     @Test
-    void unifiedPlatformBridgesEnforceDbAuthoritiesSafeAuditAndPlaceLookup() {
-        UUID userId = UUID.randomUUID();
-        Jwt staleJwt = Jwt.withTokenValue("token")
-                .header("alg", "HS256")
-                .subject(userId.toString())
-                .claim("roles", List.of("SUPER_ADMIN"))
-                .build();
-        SecurityContext prev = SecurityContextHolder.getContext();
-        try {
-            SecurityContext ctx = SecurityContextHolder.createEmptyContext();
-            ctx.setAuthentication(new JwtAuthenticationToken(
-                    staleJwt,
-                    List.of(new SimpleGrantedAuthority("ROLE_REVIEWER")),
-                    userId.toString()));
-            SecurityContextHolder.setContext(ctx);
-
-            assertThat(vn.gowithbae.common.security.CurrentUser.id()).isEqualTo(userId);
-            assertThat(vn.gowithbae.common.security.CurrentUser.roles()).containsExactly("REVIEWER");
-            assertThat(vn.gowithbae.common.security.CurrentUser.hasAnyRole("SUPER_ADMIN")).isFalse();
-        } finally {
-            SecurityContextHolder.setContext(prev);
-        }
-
-        AuditService platformAudit = mock(AuditService.class);
-        var bridgedAudit = new vn.gowithbae.common.audit.AuditService(platformAudit, JsonMapper.builder().build());
+    void officialPlatformContractsAlignAcrossMemberAAndB() {
         UUID placeId = UUID.randomUUID();
-        bridgedAudit.log(userId, "PLACE_CREATE", "place", placeId, null, Map.of("status", "DRAFT"), "CSV");
-        verify(platformAudit).log(userId, "PLACE_CREATE", "place", placeId.toString(), null, Map.of("status", "DRAFT"), "CSV");
 
+        // 1. PlaceCatalogService ẩn thông tin nhạy cảm cho địa điểm HIDDEN/INACTIVE khớp PROP OQ-11 của B
+        PlaceCard redacted = PlaceCatalogService.unavailableCard(placeId, "Quán Đã Ẩn");
+        assertThat(redacted.getId()).isEqualTo(placeId);
+        assertThat(redacted.getName()).isEqualTo("Quán Đã Ẩn");
+        assertThat(redacted.getPrice().getStatus()).isEqualTo(KnownStatus.UNKNOWN);
+        assertThat(redacted.getAreaName()).isNull();
+        assertThat(redacted.getCoverUrl()).isNull();
+        assertThat(redacted.getTags()).isEmpty();
+
+        // 2. Xuất .ics an toàn khi địa chỉ null (địa điểm đã bị ẩn)
+        String ics = new IcsCalendarFormatter().formatEvent(
+                UUID.randomUUID(),
+                "Quán Đã Ẩn",
+                null,
+                OffsetDateTime.now(FIXED_CLOCK).plusDays(1),
+                OffsetDateTime.now(FIXED_CLOCK),
+                null,
+                false);
+        assertThat(ics).contains("SUMMARY:Hẹn tại Quán Đã Ẩn");
+        assertThat(ics).doesNotContain("LOCATION:");
+
+        // 3. PlaceReportService dùng chính thức PlaceQueryService của A+B
+        PlaceQueryService placeQueryService = mock(PlaceQueryService.class);
+        doThrow(new ResponseStatusException(HttpStatus.NOT_FOUND)).when(placeQueryService).requirePublished(placeId);
+        PlaceReportService reportService = new PlaceReportService(
+                mock(JdbcClient.class),
+                mock(ActorResolver.class),
+                placeQueryService,
+                mock(StoredFileLookup.class),
+                mock(AuditService.class),
+                mock(RequestRateLimiter.class));
+        assertThatThrownBy(() -> reportService.submitReport(placeId, new PlaceReportCreate(PlaceReportReason.OTHER)))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(ex -> ((ResponseStatusException) ex).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        verify(placeQueryService).requirePublished(placeId);
+
+        // 4. Bean AdminPermissions của B gọi thẳng platform CurrentUser của A
+        CurrentUser platformUser = mock(CurrentUser.class);
+        new AdminPermissions(platformUser).requireContentRead();
+        verify(platformUser).requireAnyRole("EDITOR", "REVIEWER", "SUPER_ADMIN");
+
+        // 5. AuditService của A chặn field riêng tư, PlaceQueryServiceImpl của B từ chối null bằng 404
         var realAudit = new AuditService(mock(JdbcClient.class), JsonMapper.builder().build());
-        var guardedBridge = new vn.gowithbae.common.audit.AuditService(realAudit, JsonMapper.builder().build());
-        assertThatThrownBy(() -> guardedBridge.log(userId, "TEST", "place", placeId, null, Map.of("notes", "secret"), null))
+        assertThatThrownBy(() -> realAudit.log(UUID.randomUUID(), "TEST", "place", placeId.toString(), null,
+                Map.of("notes", "secret"), null))
                 .isInstanceOf(IllegalArgumentException.class);
 
-        var placeQuery = new PlaceQueryServiceImpl(mock(JdbcClient.class), mock(PlaceReader.class));
-        assertThatThrownBy(() -> placeQuery.requirePublished(null))
+        var placeQueryImpl = new PlaceQueryServiceImpl(mock(JdbcClient.class), mock(PlaceReader.class));
+        assertThatThrownBy(() -> placeQueryImpl.requirePublished(null))
+                .isInstanceOf(ErrorResponseException.class)
+                .extracting(ex -> ((ErrorResponseException) ex).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatThrownBy(() -> placeQueryImpl.getSavedPlace(null))
                 .isInstanceOf(ErrorResponseException.class)
                 .extracting(ex -> ((ErrorResponseException) ex).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND);

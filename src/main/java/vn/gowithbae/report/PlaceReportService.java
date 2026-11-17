@@ -29,13 +29,12 @@ import vn.gowithbae.common.ActorResolver.UserPrincipal;
 import vn.gowithbae.common.PageUtil;
 import vn.gowithbae.common.TimeHelper;
 import vn.gowithbae.platform.AuditService;
+import vn.gowithbae.platform.PlaceQueryService;
 import vn.gowithbae.platform.RequestRateLimiter;
-import vn.gowithbae.shared.PlaceCatalogService;
-import vn.gowithbae.shared.PlaceCatalogService.PlaceSummary;
 import vn.gowithbae.shared.StoredFileLookup;
 
 /**
- * Nghiệp vụ gửi báo sai địa điểm (ẩn danh/thành viên dùng RequestRateLimiter của Người A)
+ * Nghiệp vụ gửi báo sai địa điểm (kiểm tra công khai qua PlaceQueryService của B, giới hạn tần suất qua RequestRateLimiter của A)
  * và xử lý báo sai phía Admin có ghi AuditService (FR-19, FR-28, RULE-18).
  */
 @Service
@@ -45,7 +44,7 @@ public class PlaceReportService {
 
     private final JdbcClient jdbc;
     private final ActorResolver actorResolver;
-    private final PlaceCatalogService placeCatalogService;
+    private final PlaceQueryService placeQueryService;
     private final StoredFileLookup storedFileLookup;
     private final AuditService auditService;
     private final RequestRateLimiter rateLimiter;
@@ -53,13 +52,13 @@ public class PlaceReportService {
     public PlaceReportService(
             JdbcClient jdbc,
             ActorResolver actorResolver,
-            PlaceCatalogService placeCatalogService,
+            PlaceQueryService placeQueryService,
             StoredFileLookup storedFileLookup,
             AuditService auditService,
             RequestRateLimiter rateLimiter) {
         this.jdbc = jdbc;
         this.actorResolver = actorResolver;
-        this.placeCatalogService = placeCatalogService;
+        this.placeQueryService = placeQueryService;
         this.storedFileLookup = storedFileLookup;
         this.auditService = auditService;
         this.rateLimiter = rateLimiter;
@@ -67,9 +66,7 @@ public class PlaceReportService {
 
     @Transactional
     public PlaceReportReceipt submitReport(UUID placeId, PlaceReportCreate req) {
-        PlaceSummary place = placeCatalogService.findPlace(placeId)
-                .filter(PlaceSummary::isPublished)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Địa điểm không tồn tại"));
+        placeQueryService.requirePublished(placeId);
 
         Optional<UserPrincipal> userOpt = actorResolver.findAuthenticatedUser();
         UUID senderUserId = userOpt.map(UserPrincipal::userId).orElse(null);
@@ -96,7 +93,7 @@ public class PlaceReportService {
                         CAST(:senderUserId AS uuid), CAST(:fp AS text), 'NEW')
                 RETURNING id, status, created_at
                 """)
-                .param("placeId", place.id())
+                .param("placeId", placeId)
                 .param("reason", req.getReason().getValue())
                 .param("desc", description)
                 .param("fileId", req.getFileId())

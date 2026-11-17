@@ -22,33 +22,35 @@ import vn.gowithbae.api.model.PlaceStatus;
 public class AdminPlacesDelegate implements AdminPlacesApiDelegate {
 
     private final AdminPlaceService service;
+    private final AdminPermissions permissions;
 
-    public AdminPlacesDelegate(AdminPlaceService service) {
+    public AdminPlacesDelegate(AdminPlaceService service, AdminPermissions permissions) {
         this.service = service;
+        this.permissions = permissions;
     }
 
     @Override
     public ResponseEntity<AdminPlacePage> adminListPlaces(PlaceStatus status, UUID areaId, String q, Integer page,
             Integer size) {
-        AdminPermissions.requireContentRead();
+        permissions.requireContentRead();
         return ResponseEntity.ok(service.list(status, areaId, q, page == null ? 0 : page, size == null ? 20 : size));
     }
 
     @Override
     public ResponseEntity<AdminPlace> adminGetPlace(UUID placeId) {
-        AdminPermissions.requireContentRead();
+        permissions.requireContentRead();
         return ResponseEntity.ok(service.get(placeId));
     }
 
     @Override
     public ResponseEntity<AdminPlace> adminCreatePlace(AdminPlaceWrite body) {
-        AdminPermissions.requireContentEdit();
+        permissions.requireContentEdit();
         return ResponseEntity.status(HttpStatus.CREATED).body(service.create(body));
     }
 
     @Override
     public ResponseEntity<AdminPlace> adminUpdatePlace(UUID placeId, AdminPlaceWrite body) {
-        AdminPermissions.requireContentEdit();
+        permissions.requireContentEdit();
         return ResponseEntity.ok(service.update(placeId, body));
     }
 
@@ -56,22 +58,22 @@ public class AdminPlacesDelegate implements AdminPlacesApiDelegate {
     @Override
     public ResponseEntity<AdminPlace> adminTransitionPlace(UUID placeId, AdminTransitionPlaceRequest body) {
         if (body.getAction() == ActionEnum.SUBMIT) {
-            AdminPermissions.requireContentEdit();
+            permissions.requireContentEdit();
         } else {
-            AdminPermissions.requireContentReview();
+            permissions.requireContentReview();
         }
         return ResponseEntity.ok(service.transition(placeId, body.getAction(), body.getReason()));
     }
 
     @Override
     public ResponseEntity<PlaceImage> adminAddPlaceImage(UUID placeId, PlaceImageWrite body) {
-        AdminPermissions.requireContentEdit();
+        permissions.requireContentEdit();
         return ResponseEntity.status(HttpStatus.CREATED).body(service.addImage(placeId, body));
     }
 
     @Override
     public ResponseEntity<Void> adminRemovePlaceImage(UUID placeId, UUID imageId) {
-        AdminPermissions.requireContentEdit();
+        permissions.requireContentEdit();
         service.removeImage(placeId, imageId);
         return ResponseEntity.noContent().build();
     }

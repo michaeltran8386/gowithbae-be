@@ -1,0 +1,2654 @@
+openapi: 3.0.3
+info:
+  title: GoWithBae G1 API
+  version: 0.3.0
+  description: |
+    API contract cho GoWithBae G1 (web khách hàng + quản trị nội bộ).
+    Nguồn yêu cầu: `GWB-REQ-G1` v1.1 (15-11-2026), SRS hợp nhất v1.2 và CR-001.
+    Phủ FR-01..35. Số lần đã đi, bỏ qua lời nhắc chỉ đóng và xem link không đăng nhập đã CONF;
+    các nhánh actor/sửa lượt/nhắc lại sau đổi giờ còn OQ-10/25. Mỗi operation ghi mã FR/RULE liên quan.
+
+    Quy ước:
+    - `x-status: draft` = hành vi phụ thuộc câu hỏi mở (`x-oq`). Không tự chốt chính sách khi implement;
+      hỏi PO trước. Operation không có `x-status` = theo FR đã có trong nguồn.
+    - Lỗi trả `application/problem+json` (RFC 9457) kèm `traceId`; lỗi validation có `errors[]` theo trường.
+    - Tài nguyên riêng tư không thuộc quyền trả `404` (không lộ sự tồn tại, FR-22).
+    - Thời gian: ISO-8601 có offset; nghiệp vụ theo giờ Việt Nam (`Asia/Ho_Chi_Minh`). Tiền: số nguyên VND.
+    - Thao tác tạo có thể bấm lặp nhận header `Idempotency-Key` (NFR-08).
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local
+tags:
+  - name: Discovery
+    description: Khám phá, bộ sưu tập, danh mục lọc (FR-01, FR-03)
+  - name: Places
+    description: Tìm/lọc, chi tiết, so sánh, báo sai (FR-02..06, FR-19)
+  - name: Auth
+    description: Đăng nhập email OTP (FR-07)
+  - name: Me
+    description: Hồ sơ tài khoản (FR-08)
+  - name: SavedLists
+    description: Danh sách đã lưu (FR-09)
+  - name: ChoiceSessions
+    description: Cùng chọn hai người (FR-10..14)
+  - name: ShareGrants
+    description: Link mời và tham gia của người nhận (FR-11, FR-14)
+  - name: DatePlans
+    description: Kế hoạch buổi hẹn (FR-15..18)
+  - name: Support
+    description: Yêu cầu hỗ trợ của thành viên (FR-20)
+  - name: Notifications
+    description: Thông báo trong tài khoản (FR-21)
+  - name: Uploads
+    description: Tải tệp (RULE-27)
+  - name: Events
+    description: Sự kiện phân tích (FR-32)
+  - name: AdminPlaces
+    description: Biên tập, duyệt, ẩn địa điểm (FR-23, FR-24)
+  - name: AdminTaxonomy
+    description: Loại hình, nhãn, khu vực (FR-25)
+  - name: AdminCollections
+    description: Bộ sưu tập (FR-26)
+  - name: AdminUsers
+    description: Tài khoản và vai trò (FR-27)
+  - name: AdminPlaceReports
+    description: Xử lý báo sai (FR-28)
+  - name: AdminSupport
+    description: Xử lý hỗ trợ (FR-29)
+  - name: AdminImports
+    description: Nhập CSV (FR-30)
+  - name: AdminAudit
+    description: Nhật ký (FR-31)
+  - name: AdminReports
+    description: Báo cáo và xuất CSV (FR-33, FR-34)
+
+paths:
+  # ───────────────────────── Discovery ─────────────────────────
+  /collections:
+    get:
+      tags: [Discovery]
+      operationId: listCollections
+      summary: Bộ sưu tập đang trong thời gian hiển thị (FR-01)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CollectionSummary' }
+  /collections/{collectionId}:
+    get:
+      tags: [Discovery]
+      operationId: getCollection
+      summary: Chi tiết bộ sưu tập, chỉ gồm địa điểm đang công khai (FR-26, RULE-01)
+      parameters: [{ $ref: '#/components/parameters/CollectionId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CollectionDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /taxonomies:
+    get:
+      tags: [Discovery]
+      operationId: listTaxonomies
+      summary: Nhãn đang dùng theo nhóm, cho bộ lọc (FR-03, §5.1)
+      parameters:
+        - name: group
+          in: query
+          schema: { $ref: '#/components/schemas/TaxonomyGroup' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Taxonomy' }
+  /areas:
+    get:
+      tags: [Discovery]
+      operationId: listAreas
+      summary: Danh mục khu vực đang dùng (FR-03)
+      x-status: draft
+      x-oq: [OQ-01]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Area' }
+
+  # ───────────────────────── Places ─────────────────────────
+  /places:
+    get:
+      tags: [Places]
+      operationId: searchPlaces
+      summary: Tìm, lọc, sắp xếp địa điểm đã duyệt (FR-02, FR-03, FR-04, RULE-01..05)
+      description: |
+        - `q` không phân biệt hoa/thường, hỗ trợ không dấu.
+        - Các nhóm lọc kết hợp AND. Trong nhóm: ACTIVITY/STYLE/SCENERY/OCCASION là OR; VIBE/FEATURE/AMENITY là AND (RULE-02).
+        - Thiếu giá/giờ/thuộc tính không thỏa bộ lọc tương ứng (RULE-04).
+        - 0 kết quả vẫn trả 200, giữ nguyên điều kiện.
+        - Công thức mức khớp (OQ-04), bán kính/khoảng cách (OQ-05) chưa chốt.
+      x-status: draft
+      x-oq: [OQ-03, OQ-04, OQ-05]
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string, maxLength: 100 }
+        - name: areaId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: lat
+          in: query
+          description: Điểm gốc do người dùng cung cấp; bắt buộc đi cùng `lng`.
+          schema: { type: number, format: double, minimum: -90, maximum: 90 }
+        - name: lng
+          in: query
+          schema: { type: number, format: double, minimum: -180, maximum: 180 }
+        - name: radiusKm
+          in: query
+          schema: { type: number, format: double, minimum: 0 }
+        - name: budget
+          in: query
+          schema: { $ref: '#/components/schemas/BudgetBand' }
+        - name: at
+          in: query
+          description: Ngày giờ dự định đến; chỉ trả nơi đã xác minh mở tại thời điểm này (RULE-05).
+          schema: { type: string, format: date-time }
+        - name: tagIds
+          in: query
+          description: Mã nhãn; server nhóm theo `TaxonomyGroup` và áp RULE-02.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string, format: uuid }
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [DEFAULT, NEAREST, PRICE_ASC]
+            default: DEFAULT
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaceSearchPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /places/compare:
+    get:
+      tags: [Places]
+      operationId: comparePlaces
+      summary: So sánh 2–3 địa điểm khác nhau (FR-06, RULE-06)
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          style: form
+          explode: false
+          schema:
+            type: array
+            minItems: 2
+            maxItems: 3
+            uniqueItems: true
+            items: { type: string, format: uuid }
+        - name: lat
+          in: query
+          schema: { type: number, format: double }
+        - name: lng
+          in: query
+          schema: { type: number, format: double }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PlaceDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /places/{placeId}:
+    get:
+      tags: [Places]
+      operationId: getPlace
+      summary: Chi tiết địa điểm đang công khai (FR-05)
+      description: Link tới địa điểm đã ẩn xử lý theo OQ-11.
+      x-status: draft
+      x-oq: [OQ-11]
+      parameters: [{ $ref: '#/components/parameters/PlaceId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaceDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /places/{placeId}/reports:
+    post:
+      tags: [Places]
+      operationId: reportPlace
+      summary: Gửi báo sai, cho phép khách ẩn danh, có chống gửi hàng loạt (FR-19, RULE-18)
+      security: [{}, { bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlaceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlaceReportCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaceReportReceipt' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  # ───────────────────────── Auth ─────────────────────────
+  /auth/otp/request:
+    post:
+      tags: [Auth]
+      operationId: requestOtp
+      summary: Gửi mã một lần qua email (FR-07, RULE-16)
+      description: Luôn trả 202 dù email chưa có tài khoản (không lộ tồn tại). Hạn mã/giới hạn gửi lại theo OQ-06.
+      x-status: draft
+      x-oq: [OQ-06]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email, maxLength: 254 }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '202': { description: Accepted }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/otp/verify:
+    post:
+      tags: [Auth]
+      operationId: verifyOtp
+      summary: Xác minh mã, tạo tài khoản nếu chưa có, cấp phiên (FR-07, RULE-16)
+      description: 'Nhân viên cần thêm staffCode từ TOTP đã provisioning tin cậy (quyết định triển khai A cho NFR-05). Tài khoản thường không cần trường này. Secret TOTP không cấp qua API đăng nhập.'
+      x-status: draft
+      x-oq: [OQ-06]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, code]
+              properties:
+                email: { type: string, format: email }
+                code: { type: string, pattern: '^[0-9]{6}$' }
+                staffCode: { type: string, pattern: '^[0-9]{6}$', description: 'Mã TOTP của nhân viên, bắt buộc khi tài khoản có vai trò nội bộ.' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthToken' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Thu hồi phiên hiện tại (FR-08)
+      security: [{ bearerAuth: [] }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '204': { description: No Content }
+
+  # ───────────────────────── Me ─────────────────────────
+  /me:
+    get:
+      tags: [Me]
+      operationId: getMe
+      security: [{ bearerAuth: [] }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [Me]
+      operationId: updateMe
+      summary: Sửa tên hiển thị, ảnh đại diện (FR-08)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserUpdate' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /me/email-change:
+    post:
+      tags: [Me]
+      operationId: requestEmailChange
+      summary: Gửi mã xác minh tới email mới (FR-08)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [newEmail]
+              properties:
+                newEmail: { type: string, format: email, maxLength: 254 }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '202': { description: Accepted }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /me/places/{placeId}/visit-count:
+    get:
+      tags: [Me]
+      operationId: getMyPlaceVisitCount
+      summary: Số lần tự xác nhận đã đi tại một chi nhánh của tài khoản hiện tại (FR-35, RULE-29)
+      description: |
+        Danh tính lấy từ bearer, không nhận userId từ client. Tính từ các lượt YES hợp lệ,
+        mỗi plan/người chỉ một lượt; không đếm click, analytics, dismissal hoặc chuỗi ngày.
+        Không cấp qua phiên khách hay ghép vào response địa điểm công khai. Lỗi đọc không được giả count=0.
+        Lịch sử nơi ẩn và sửa lượt còn OQ-10/11/25; không chặn chức năng đếm lượt hợp lệ đã CONF.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlaceId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaceVisitCount' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /me/email-change/verify:
+    post:
+      tags: [Me]
+      operationId: verifyEmailChange
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, pattern: '^[0-9]{6}$' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /me/deletion-request:
+    post:
+      tags: [Me]
+      operationId: requestAccountDeletion
+      summary: Yêu cầu xóa tài khoản; thu hồi phiên và link riêng ngay (FR-08, RULE-17)
+      x-status: draft
+      x-oq: [OQ-17]
+      security: [{ bearerAuth: [] }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '202': { description: Accepted — chưa có nghĩa là đã xóa dữ liệu }
+
+  # ───────────────────────── Saved lists ─────────────────────────
+  /saved-lists:
+    get:
+      tags: [SavedLists]
+      operationId: listSavedLists
+      security: [{ bearerAuth: [] }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SavedListSummary' }
+    post:
+      tags: [SavedLists]
+      operationId: createSavedList
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SavedListWrite' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavedListSummary' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /saved-lists/{listId}:
+    parameters: [{ $ref: '#/components/parameters/ListId' }]
+    get:
+      tags: [SavedLists]
+      operationId: getSavedList
+      summary: Danh sách và địa điểm; nơi đã ẩn giữ tên + cảnh báo (FR-09)
+      security: [{ bearerAuth: [] }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavedListDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [SavedLists]
+      operationId: renameSavedList
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SavedListWrite' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavedListSummary' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [SavedLists]
+      operationId: deleteSavedList
+      summary: Xóa danh sách; không xóa địa điểm/kế hoạch (RULE-07)
+      security: [{ bearerAuth: [] }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /saved-lists/{listId}/places/{placeId}:
+    parameters:
+      - $ref: '#/components/parameters/ListId'
+      - $ref: '#/components/parameters/PlaceId'
+    put:
+      tags: [SavedLists]
+      operationId: addPlaceToList
+      summary: Thêm địa điểm, idempotent — thêm lặp không tạo bản ghi mới (RULE-07)
+      security: [{ bearerAuth: [] }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [SavedLists]
+      operationId: removePlaceFromList
+      security: [{ bearerAuth: [] }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────── Choice sessions ─────────────────────────
+  /choice-sessions:
+    get:
+      tags: [ChoiceSessions]
+      operationId: listMyChoiceSessions
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ChoiceSession' }
+    post:
+      tags: [ChoiceSessions]
+      operationId: createChoiceSession
+      summary: Tạo phiên cùng chọn từ 2–5 địa điểm đã lưu, sinh link mời (FR-10, RULE-08)
+      x-status: draft
+      x-oq: [OQ-07, OQ-11]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [placeIds]
+              properties:
+                placeIds:
+                  type: array
+                  minItems: 2
+                  maxItems: 5
+                  uniqueItems: true
+                  items: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Created; `shareGrant.inviteToken` chỉ trả một lần
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChoiceSessionCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /choice-sessions/{sessionId}:
+    get:
+      tags: [ChoiceSessions]
+      operationId: getChoiceSession
+      summary: Người tạo hoặc người nhận còn quyền xem phiên (FR-12, FR-22)
+      x-status: draft
+      x-oq: [OQ-07]
+      security: [{ bearerAuth: [] }, { recipientSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChoiceSession' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /choice-sessions/{sessionId}/votes/{candidateId}:
+    put:
+      tags: [ChoiceSessions]
+      operationId: castVote
+      summary: Thích/Bỏ qua một lựa chọn; sửa được trước khi chốt (FR-12, RULE-10)
+      security: [{ bearerAuth: [] }, { recipientSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: candidateId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [preference]
+              properties:
+                preference: { $ref: '#/components/schemas/VotePreference' }
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /choice-sessions/{sessionId}/finalize:
+    post:
+      tags: [ChoiceSessions]
+      operationId: finalizeChoiceSession
+      summary: Người tạo chốt một lựa chọn và tạo kế hoạch trong cùng một thao tác (FR-13, RULE-11)
+      x-status: draft
+      x-oq: [OQ-08]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidateId, scheduledAt]
+              properties:
+                candidateId: { type: string, format: uuid }
+                scheduledAt: { type: string, format: date-time }
+                note: { type: string, maxLength: 1000 }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DatePlan' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /choice-sessions/{sessionId}/share-grants:
+    post:
+      tags: [ChoiceSessions]
+      operationId: createShareGrant
+      summary: Cấp link mời mới; link cũ không tự khôi phục (FR-14)
+      x-status: draft
+      x-oq: [OQ-07, OQ-09]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShareGrantCreated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /choice-sessions/{sessionId}/share-grants/{grantId}:
+    delete:
+      tags: [ChoiceSessions]
+      operationId: revokeShareGrant
+      summary: Thu hồi link; phiên người nhận bắt nguồn từ link mất quyền ngay (FR-14, RULE-12)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: grantId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /choice-sessions/{sessionId}/recipient:
+    delete:
+      tags: [ChoiceSessions]
+      operationId: removeRecipient
+      summary: Loại người nhận; phiếu cũ không bị sửa nghĩa (FR-14)
+      x-status: draft
+      x-oq: [OQ-07]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/SessionId' }]
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────── Share grants (recipient) ─────────────────────────
+  /share-grants/{inviteToken}:
+    get:
+      tags: [ShareGrants]
+      operationId: previewShareGrant
+      summary: Kiểm tra link mời trước khi tham gia; không lộ danh sách gốc (FR-11, RULE-12)
+      description: |
+        CR-001/RULE-30: khách xem các lựa chọn qua link hợp lệ ngay, không cần tài khoản,
+        nhập tên hoặc chiếm suất. displayName chỉ bắt buộc khi join; chỉ cấp dữ liệu trong lời mời,
+        không email, ghi chú riêng, danh sách gốc hoặc số lần đã đi của người tạo.
+      parameters: [{ $ref: '#/components/parameters/InviteToken' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ShareGrantPreview' }
+        '410': { $ref: '#/components/responses/Gone' }
+  /share-grants/{inviteToken}/join:
+    post:
+      tags: [ShareGrants]
+      operationId: joinShareGrant
+      summary: Chiếm suất người nhận duy nhất, cố định tập lựa chọn, cấp phiên người nhận (FR-11, RULE-08, RULE-09)
+      description: Hai người cùng join đồng thời chỉ một người thành công; người còn lại nhận 409 (NFR-08).
+      parameters: [{ $ref: '#/components/parameters/InviteToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [displayName]
+              properties:
+                displayName: { type: string, minLength: 1, maxLength: 50 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecipientSessionToken' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  # ───────────────────────── Date plans ─────────────────────────
+  /date-plans:
+    get:
+      tags: [DatePlans]
+      operationId: listDatePlans
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/DatePlanStatus' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/DatePlan' }
+    post:
+      tags: [DatePlans]
+      operationId: createDatePlan
+      summary: Tạo kế hoạch trực tiếp, không cần cùng chọn (FR-15, RULE-05, RULE-13)
+      description: Giờ đã xác minh đóng → 409; giờ chưa rõ → 201 kèm `warnings`.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DatePlanWrite' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DatePlan' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /date-plans/{planId}:
+    parameters: [{ $ref: '#/components/parameters/PlanId' }]
+    get:
+      tags: [DatePlans]
+      operationId: getDatePlan
+      summary: Chủ sở hữu hoặc người nhận còn quyền xem (FR-16, RULE-14)
+      x-status: draft
+      x-oq: [OQ-09]
+      security: [{ bearerAuth: [] }, { recipientSession: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DatePlan' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [DatePlans]
+      operationId: updateDatePlan
+      summary: Chủ sở hữu sửa giờ/ghi chú/địa điểm; kiểm tra lại điều kiện (FR-16)
+      x-status: draft
+      x-oq: [OQ-10, OQ-11]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DatePlanUpdate' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DatePlan' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /date-plans/{planId}/cancel:
+    post:
+      tags: [DatePlans]
+      operationId: cancelDatePlan
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DatePlan' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /date-plans/{planId}/calendar.ics:
+    get:
+      tags: [DatePlans]
+      operationId: downloadDatePlanCalendar
+      summary: Tệp lịch một lần, giờ Việt Nam (FR-17)
+      x-status: draft
+      x-oq: [OQ-12]
+      security: [{ bearerAuth: [] }, { recipientSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            text/calendar:
+              schema: { type: string }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /date-plans/{planId}/visit-report:
+    put:
+      tags: [DatePlans]
+      operationId: reportVisit
+      summary: Tự xác nhận chuyến đi; không dùng để Bỏ qua lời nhắc (FR-18, FR-35, RULE-15/29)
+      description: |
+        Giữ tương thích thao tác ghi câu trả lời. NO là câu trả lời Không, không phải dismissal.
+        Retry cùng plan/người không tạo lượt mới. Quyền actor và sửa câu trả lời còn OQ-10/25.
+        UI lời nhắc dùng /reminder với CONFIRM_VISIT hoặc DISMISS, không gửi NO khi bấm Bỏ qua.
+      x-status: draft
+      x-oq: [OQ-10, OQ-25]
+      security: [{ bearerAuth: [] }, { recipientSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [answer]
+              properties:
+                answer: { type: string, enum: [YES, NO] }
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /date-plans/{planId}/reminder:
+    get:
+      tags: [DatePlans]
+      operationId: getDateReminder
+      summary: Trạng thái lời nhắc Đi chưa của người xem hiện tại (FR-18, RULE-15)
+      description: |
+        Đến scheduledAt, web hiển thị khi shouldShow=true; không cần plan chuyển PAST.
+        Dismissed/answered/cancelled thì shouldShow=false kể cả tải lại. Chưa có nhắc trả reminder=null.
+        Server tính shouldShow/canRespond sau kiểm tra quyền và trạng thái hiện hành, không tin client.
+        Không nhắc plan đã hủy, không tự thêm email/push. Actor và nhắc lại sau sửa giờ còn OQ-10/25.
+      x-status: draft
+      x-oq: [OQ-10, OQ-25]
+      security: [{ bearerAuth: [] }, { recipientSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DateReminderState' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [DatePlans]
+      operationId: respondToDateReminder
+      summary: Đã đi hoặc chỉ Bỏ qua lời nhắc (FR-18, FR-35, RULE-15/29)
+      description: |
+        DISMISS chỉ lưu dismissed/dismissedAt, giữ visitAnswer và plan, không popup khác; retry không nhắc lại.
+        CONFIRM_VISIT ghi YES duy nhất và chuyển nhắc ANSWERED trong cùng transaction.
+        Danh tính lấy từ phiên server; phiên khách không tự tạo lượt cá nhân. Kiểm tra quyền, plan chưa hủy,
+        scheduledAt đã đến và trạng thái nhắc tại thời điểm ghi. Retry cùng action đã thành công trả trạng thái;
+        action khác trên nhắc đã đóng trả 409, không tự mở lại/sửa lượt trước khi OQ-10/25 chốt.
+      x-status: draft
+      x-oq: [OQ-10, OQ-25]
+      security: [{ bearerAuth: [] }, { recipientSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DateReminderAction' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DateReminderState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────── Support ─────────────────────────
+  /support-tickets:
+    get:
+      tags: [Support]
+      operationId: listMyTickets
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SupportTicket' }
+    post:
+      tags: [Support]
+      operationId: createTicket
+      summary: Thành viên gửi yêu cầu hỗ trợ (FR-20, RULE-19)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SupportTicketCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportTicketDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /support-tickets/{ticketId}:
+    get:
+      tags: [Support]
+      operationId: getMyTicket
+      summary: Chỉ trả tin nhắn PUBLIC (RULE-19)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/TicketId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportTicketDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /support-tickets/{ticketId}/messages:
+    post:
+      tags: [Support]
+      operationId: replyMyTicket
+      summary: Bổ sung nội dung; trả lời ticket đã đóng theo OQ-13
+      x-status: draft
+      x-oq: [OQ-13]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/TicketId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MessageCreate' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportMessage' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────── Notifications ─────────────────────────
+  /notifications:
+    get:
+      tags: [Notifications]
+      operationId: listNotifications
+      x-status: draft
+      x-oq: [OQ-14]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationPage' }
+  /notifications/{notificationId}/read:
+    post:
+      tags: [Notifications]
+      operationId: markNotificationRead
+      x-status: draft
+      x-oq: [OQ-14]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: notificationId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────── Uploads & events ─────────────────────────
+  /uploads:
+    post:
+      tags: [Uploads]
+      operationId: uploadFile
+      summary: Tải ảnh/tệp; giới hạn loại/kích thước, kiểm tra nội dung (RULE-27)
+      x-status: draft
+      x-oq: [OQ-21]
+      security: [{}, { bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, purpose]
+              properties:
+                file: { type: string, format: binary }
+                purpose: { type: string, enum: [AVATAR, PLACE_IMAGE, PLACE_REPORT, SUPPORT, COLLECTION] }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoredFile' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { description: File too large }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /events:
+    post:
+      tags: [Events]
+      operationId: trackEvents
+      summary: Ghi lô sự kiện phân tích; trùng `eventId` bị bỏ qua (FR-32, RULE-25)
+      x-status: draft
+      x-oq: [OQ-20]
+      security: [{}, { bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [events]
+              properties:
+                events:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items: { $ref: '#/components/schemas/AnalyticsEvent' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '202': { description: Accepted }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  # ───────────────────────── Admin: places ─────────────────────────
+  /admin/places:
+    get:
+      tags: [AdminPlaces]
+      operationId: adminListPlaces
+      summary: Lọc theo khu vực/trạng thái, gồm hàng chờ duyệt (FR-23, A01)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/PlaceStatus' }
+        - name: areaId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: q
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminPlacePage' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [AdminPlaces]
+      operationId: adminCreatePlace
+      summary: Tạo nháp (FR-23)
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminPlaceWrite' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminPlace' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/places/{placeId}:
+    parameters: [{ $ref: '#/components/parameters/PlaceId' }]
+    get:
+      tags: [AdminPlaces]
+      operationId: adminGetPlace
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminPlace' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [AdminPlaces]
+      operationId: adminUpdatePlace
+      summary: Sửa nháp; sửa bản đã công khai phải qua duyệt lại (FR-23)
+      x-status: draft
+      x-oq: [OQ-15]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminPlaceWrite' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminPlace' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/places/{placeId}/transitions:
+    post:
+      tags: [AdminPlaces]
+      operationId: adminTransitionPlace
+      summary: Chuyển trạng thái theo vòng đời §7.2; ghi audit (FR-23, FR-24, RULE-20, RULE-21)
+      description: |
+        SUBMIT (Draft→Pending), APPROVE (Pending→Published), RETURN (Pending→Draft, cần reason),
+        HIDE (Published→Hidden, cần reason), DEACTIVATE (Published→Inactive, cần reason),
+        RESTORE (Hidden/Inactive→Pending, OQ-15). Biên tập không tự APPROVE (OQ-18 vai trò kép).
+        Thiếu điều kiện xuất bản trả 400 kèm `errors[]`.
+      x-status: draft
+      x-oq: [OQ-15, OQ-18]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlaceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [SUBMIT, APPROVE, RETURN, HIDE, DEACTIVATE, RESTORE] }
+                reason: { type: string, maxLength: 1000 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminPlace' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/places/{placeId}/images:
+    post:
+      tags: [AdminPlaces]
+      operationId: adminAddPlaceImage
+      summary: Gắn ảnh có quyền sử dụng (FR-23, RULE-28)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlaceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlaceImageWrite' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaceImage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /admin/places/{placeId}/images/{imageId}:
+    delete:
+      tags: [AdminPlaces]
+      operationId: adminRemovePlaceImage
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/PlaceId'
+        - name: imageId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────── Admin: taxonomy & areas ─────────────────────────
+  /admin/taxonomies:
+    get:
+      tags: [AdminTaxonomy]
+      operationId: adminListTaxonomies
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: group
+          in: query
+          schema: { $ref: '#/components/schemas/TaxonomyGroup' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Taxonomy' }
+    post:
+      tags: [AdminTaxonomy]
+      operationId: adminCreateTaxonomy
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaxonomyWrite' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Taxonomy' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/taxonomies/{taxonomyId}:
+    patch:
+      tags: [AdminTaxonomy]
+      operationId: adminUpdateTaxonomy
+      summary: Đổi tên hoặc ngừng dùng; không xóa dây chuyền (FR-25, RULE-22)
+      x-status: draft
+      x-oq: [OQ-18]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: taxonomyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 100 }
+                status: { $ref: '#/components/schemas/ActiveStatus' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Taxonomy' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/areas:
+    post:
+      tags: [AdminTaxonomy]
+      operationId: adminCreateArea
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AreaWrite' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Area' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/areas/{areaId}:
+    patch:
+      tags: [AdminTaxonomy]
+      operationId: adminUpdateArea
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: areaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, maxLength: 100 }
+                status: { $ref: '#/components/schemas/ActiveStatus' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Area' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────── Admin: collections ─────────────────────────
+  /admin/collections:
+    get:
+      tags: [AdminCollections]
+      operationId: adminListCollections
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CollectionDetail' }
+    post:
+      tags: [AdminCollections]
+      operationId: adminCreateCollection
+      x-status: draft
+      x-oq: [OQ-18]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionWrite' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CollectionDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /admin/collections/{collectionId}:
+    parameters: [{ $ref: '#/components/parameters/CollectionId' }]
+    put:
+      tags: [AdminCollections]
+      operationId: adminUpdateCollection
+      x-status: draft
+      x-oq: [OQ-18]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CollectionWrite' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CollectionDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [AdminCollections]
+      operationId: adminDeleteCollection
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ───────────────────────── Admin: users ─────────────────────────
+  /admin/users:
+    get:
+      tags: [AdminUsers]
+      operationId: adminListUsers
+      summary: Tìm tài khoản (FR-27); chỉ quản trị cao nhất
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/UserStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUserPage' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/users/{userId}/lock:
+    post:
+      tags: [AdminUsers]
+      operationId: adminLockUser
+      summary: Khóa có lý do; ghi audit (FR-27, RULE-17)
+      x-status: draft
+      x-oq: [OQ-17]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody: { $ref: '#/components/requestBodies/Reason' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/users/{userId}/unlock:
+    post:
+      tags: [AdminUsers]
+      operationId: adminUnlockUser
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody: { $ref: '#/components/requestBodies/Reason' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/users/{userId}/roles:
+    put:
+      tags: [AdminUsers]
+      operationId: adminSetUserRoles
+      summary: Gán/bỏ vai trò; ghi audit; bảo vệ quản trị cuối (FR-27)
+      x-status: draft
+      x-oq: [OQ-18]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [roles, reason]
+              properties:
+                roles:
+                  type: array
+                  uniqueItems: true
+                  items: { $ref: '#/components/schemas/Role' }
+                reason: { type: string, maxLength: 1000 }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────── Admin: place reports ─────────────────────────
+  /admin/place-reports:
+    get:
+      tags: [AdminPlaceReports]
+      operationId: adminListPlaceReports
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/PlaceReportStatus' }
+        - name: assigneeId
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaceReportPage' }
+  /admin/place-reports/{reportId}:
+    get:
+      tags: [AdminPlaceReports]
+      operationId: adminGetPlaceReport
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/ReportId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaceReport' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/place-reports/{reportId}/transitions:
+    post:
+      tags: [AdminPlaceReports]
+      operationId: adminTransitionPlaceReport
+      summary: Giao việc/chuyển trạng thái; đóng phải có ghi chú (FR-28, RULE-18)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/ReportId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/PlaceReportStatus' }
+                assigneeId: { type: string, format: uuid }
+                note: { type: string, maxLength: 2000 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlaceReport' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────── Admin: support ─────────────────────────
+  /admin/support-tickets:
+    get:
+      tags: [AdminSupport]
+      operationId: adminListTickets
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/TicketStatus' }
+        - name: assigneeId
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportTicketPage' }
+  /admin/support-tickets/{ticketId}:
+    get:
+      tags: [AdminSupport]
+      operationId: adminGetTicket
+      summary: Gồm cả ghi chú INTERNAL
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/TicketId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportTicketDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/support-tickets/{ticketId}/messages:
+    post:
+      tags: [AdminSupport]
+      operationId: adminReplyTicket
+      summary: Trả lời PUBLIC hoặc ghi chú INTERNAL (FR-29, RULE-19)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/TicketId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/MessageCreate'
+                - type: object
+                  required: [visibility]
+                  properties:
+                    visibility: { $ref: '#/components/schemas/MessageVisibility' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportMessage' }
+  /admin/support-tickets/{ticketId}/transitions:
+    post:
+      tags: [AdminSupport]
+      operationId: adminTransitionTicket
+      x-status: draft
+      x-oq: [OQ-13]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/TicketId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/TicketStatus' }
+                assigneeId: { type: string, format: uuid }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SupportTicketDetail' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────── Admin: CSV import ─────────────────────────
+  /admin/imports/template.csv:
+    get:
+      tags: [AdminImports]
+      operationId: adminDownloadImportTemplate
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: OK
+          content:
+            text/csv:
+              schema: { type: string }
+  /admin/imports:
+    post:
+      tags: [AdminImports]
+      operationId: adminValidateImport
+      summary: Tải CSV và kiểm tra thử; chưa ghi dữ liệu (FR-30, RULE-23)
+      x-status: draft
+      x-oq: [OQ-19, OQ-21]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportBatch' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /admin/imports/{batchId}:
+    get:
+      tags: [AdminImports]
+      operationId: adminGetImport
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/BatchId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportBatch' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/imports/{batchId}/commit:
+    post:
+      tags: [AdminImports]
+      operationId: adminCommitImport
+      summary: Ghi lô thành nháp; mặc định chỉ khi toàn lô hợp lệ (FR-30)
+      x-status: draft
+      x-oq: [OQ-19]
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/BatchId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportBatch' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  # ───────────────────────── Admin: audit & reports ─────────────────────────
+  /admin/audit-logs:
+    get:
+      tags: [AdminAudit]
+      operationId: adminListAuditLogs
+      summary: Chỉ đọc (FR-31)
+      x-status: draft
+      x-oq: [OQ-17, OQ-18]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: objectType
+          in: query
+          schema: { type: string }
+        - name: objectId
+          in: query
+          schema: { type: string }
+        - name: actorId
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditLogPage' }
+  /admin/reports/summary:
+    get:
+      tags: [AdminReports]
+      operationId: adminReportSummary
+      summary: Chỉ số §10.1; độ trễ tối đa 24 giờ (FR-33, RULE-26)
+      x-status: draft
+      x-oq: [OQ-20]
+      security: [{ bearerAuth: [] }]
+      parameters: &reportFilters
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - name: areaId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: categoryId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: platform
+          in: query
+          schema: { $ref: '#/components/schemas/Platform' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReportSummary' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /admin/reports/export.csv:
+    get:
+      tags: [AdminReports]
+      operationId: adminExportReport
+      summary: Xuất CSV cùng bộ lọc và quyền với báo cáo (FR-34)
+      x-status: draft
+      x-oq: [OQ-20]
+      security: [{ bearerAuth: [] }]
+      parameters: *reportFilters
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            text/csv:
+              schema: { type: string }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Phiên thành viên/nhân sự. Server kiểm tra phiên còn hiệu lực mỗi request (thu hồi có hiệu lực ngay).
+    recipientSession:
+      type: apiKey
+      in: header
+      name: X-Recipient-Session
+      description: Phiên người nhận link (không cần tài khoản); phụ thuộc ShareGrant còn hiệu lực (RULE-12).
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+    Size:
+      name: size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    From:
+      name: from
+      in: query
+      schema: { type: string, format: date }
+    To:
+      name: to
+      in: query
+      schema: { type: string, format: date }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: { type: string, maxLength: 64 }
+    PlaceId:
+      name: placeId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CollectionId:
+      name: collectionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ListId:
+      name: listId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    InviteToken:
+      name: inviteToken
+      in: path
+      required: true
+      schema: { type: string, minLength: 32, maxLength: 128 }
+    PlanId:
+      name: planId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    TicketId:
+      name: ticketId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ReportId:
+      name: reportId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    BatchId:
+      name: batchId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  requestBodies:
+    Reason:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [reason]
+            properties:
+              reason: { type: string, minLength: 1, maxLength: 1000 }
+
+  responses:
+    StandardError:
+      description: 'Lỗi chuẩn của các operation A, gồm validation/quyền/trạng thái/tích hợp chưa sẵn sàng; xem status trong Problem.'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    BadRequest:
+      description: Dữ liệu không hợp lệ
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Chưa đăng nhập hoặc phiên hết hạn
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Không có quyền (chỉ dùng khi đối tượng không riêng tư)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Không tồn tại hoặc không có quyền xem
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: Vi phạm trạng thái/quy tắc nghiệp vụ (vd. suất người nhận đã có người, đã chốt)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Gone:
+      description: Link hết hạn hoặc đã thu hồi
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    TooManyRequests:
+      description: Vượt hạn mức
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    # ── common ──
+    Problem:
+      type: object
+      required: [title, status]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        code: { type: string, description: 'Mã lỗi nghiệp vụ, vd. RULE-06, SLOT_TAKEN' }
+        traceId: { type: string }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+    PageMeta:
+      type: object
+      required: [page, size, totalElements, totalPages]
+      properties:
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+        totalPages: { type: integer }
+    ActiveStatus:
+      type: string
+      enum: [ACTIVE, DEPRECATED]
+    Platform:
+      type: string
+      enum: [WEB_MOBILE, WEB_DESKTOP]
+    Warning:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: HOURS_UNKNOWN }
+        message: { type: string }
+
+    # ── discovery ──
+    TaxonomyGroup:
+      type: string
+      enum: [CATEGORY, ACTIVITY, VIBE, STYLE, SCENERY, FEATURE, AMENITY, OCCASION]
+    Taxonomy:
+      type: object
+      required: [id, group, code, name, status]
+      properties:
+        id: { type: string, format: uuid }
+        group: { $ref: '#/components/schemas/TaxonomyGroup' }
+        code: { type: string }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/ActiveStatus' }
+    TaxonomyWrite:
+      type: object
+      required: [group, code, name]
+      properties:
+        group: { $ref: '#/components/schemas/TaxonomyGroup' }
+        code: { type: string, pattern: '^[A-Z0-9_]{2,40}$' }
+        name: { type: string, maxLength: 100 }
+    Area:
+      type: object
+      required: [id, code, name, status]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        name: { type: string }
+        status: { $ref: '#/components/schemas/ActiveStatus' }
+    AreaWrite:
+      type: object
+      required: [code, name]
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9_]{2,40}$' }
+        name: { type: string, maxLength: 100 }
+    CollectionSummary:
+      type: object
+      required: [id, title]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        coverUrl: { type: string, format: uri, nullable: true }
+    CollectionDetail:
+      allOf:
+        - $ref: '#/components/schemas/CollectionSummary'
+        - type: object
+          properties:
+            body: { type: string, nullable: true }
+            visibleFrom: { type: string, format: date-time, nullable: true }
+            visibleUntil: { type: string, format: date-time, nullable: true }
+            places:
+              type: array
+              items: { $ref: '#/components/schemas/PlaceCard' }
+    CollectionWrite:
+      type: object
+      required: [title, placeIds]
+      properties:
+        title: { type: string, maxLength: 150 }
+        body: { type: string, maxLength: 5000 }
+        coverFileId: { type: string, format: uuid }
+        visibleFrom: { type: string, format: date-time }
+        visibleUntil: { type: string, format: date-time }
+        placeIds:
+          type: array
+          description: Theo thứ tự hiển thị
+          items: { type: string, format: uuid }
+
+    # ── places ──
+    BudgetBand:
+      type: string
+      description: 'PROP RULE-03: FREE p=0; UNDER_200K 0<p<200000; FROM_200K_TO_400K 200000≤p<400000; FROM_400K_TO_700K 400000≤p≤700000; OVER_700K p>700000 (OQ-03)'
+      enum: [FREE, UNDER_200K, FROM_200K_TO_400K, FROM_400K_TO_700K, OVER_700K]
+    KnownStatus:
+      type: string
+      enum: [KNOWN, UNKNOWN]
+    PlaceStatus:
+      type: string
+      enum: [DRAFT, PENDING, PUBLISHED, HIDDEN, INACTIVE]
+    Price:
+      type: object
+      required: [status]
+      description: 'KNOWN ⇒ 0 ≤ min ≤ standardForTwo ≤ max (VND). UNKNOWN ⇒ hiển thị "Chưa có thông tin".'
+      properties:
+        status: { $ref: '#/components/schemas/KnownStatus' }
+        standardForTwo: { type: integer, format: int64, minimum: 0, nullable: true }
+        min: { type: integer, format: int64, minimum: 0, nullable: true }
+        max: { type: integer, format: int64, minimum: 0, nullable: true }
+        includes: { type: string, nullable: true }
+        verifiedAt: { type: string, format: date, nullable: true }
+    TimeRange:
+      type: object
+      required: [opensAt, closesAt]
+      properties:
+        opensAt: { type: string, pattern: '^[0-2][0-9]:[0-5][0-9]$', example: '09:00' }
+        closesAt: { type: string, pattern: '^[0-2][0-9]:[0-5][0-9]$', example: '22:00' }
+    OpeningHours:
+      type: object
+      required: [status]
+      description: Giờ Việt Nam. Ngoại lệ ưu tiên lịch tuần (PROP); khoảng qua đêm OQ-04.
+      properties:
+        status: { $ref: '#/components/schemas/KnownStatus' }
+        weekly:
+          type: array
+          items:
+            type: object
+            required: [dayOfWeek, ranges]
+            properties:
+              dayOfWeek: { type: integer, minimum: 1, maximum: 7, description: '1 = Thứ Hai' }
+              ranges:
+                type: array
+                items: { $ref: '#/components/schemas/TimeRange' }
+        exceptions:
+          type: array
+          items:
+            type: object
+            required: [date, closed]
+            properties:
+              date: { type: string, format: date }
+              closed: { type: boolean }
+              ranges:
+                type: array
+                items: { $ref: '#/components/schemas/TimeRange' }
+              note: { type: string }
+    PlaceImage:
+      type: object
+      required: [id, url, sortOrder, cover]
+      properties:
+        id: { type: string, format: uuid }
+        url: { type: string, format: uri }
+        caption: { type: string, nullable: true }
+        sortOrder: { type: integer }
+        cover: { type: boolean }
+    PlaceImageWrite:
+      type: object
+      required: [fileId, sourceRights]
+      properties:
+        fileId: { type: string, format: uuid }
+        caption: { type: string, maxLength: 300 }
+        sortOrder: { type: integer, minimum: 0 }
+        cover: { type: boolean }
+        sourceRights: { type: string, maxLength: 500, description: Nguồn và quyền sử dụng ảnh }
+    PlaceCard:
+      type: object
+      required: [id, name, price, tags]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        areaName: { type: string, nullable: true }
+        coverUrl: { type: string, format: uri, nullable: true }
+        price: { $ref: '#/components/schemas/Price' }
+        tags:
+          type: array
+          maxItems: 3
+          items: { $ref: '#/components/schemas/Taxonomy' }
+        distanceKm:
+          type: number
+          format: double
+          nullable: true
+          description: Ước tính; chỉ có khi request có điểm gốc. Không phải thời gian đi.
+        lat: { type: number, format: double }
+        lng: { type: number, format: double }
+    PlaceSearchPage:
+      type: object
+      required: [items, page, searchId]
+      properties:
+        searchId: { type: string, format: uuid, description: Gắn với sự kiện search_submitted/results_shown }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PlaceCard' }
+        page: { $ref: '#/components/schemas/PageMeta' }
+    PlaceDetail:
+      type: object
+      required: [id, code, name, price, hours, images, tags]
+      description: Thứ tự hiển thị FR-05. Trường null = "Chưa có thông tin"; không có sao/đánh giá.
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, description: Mã chi nhánh }
+        name: { type: string }
+        category: { $ref: '#/components/schemas/Taxonomy' }
+        area: { $ref: '#/components/schemas/Area' }
+        images:
+          type: array
+          items: { $ref: '#/components/schemas/PlaceImage' }
+        price: { $ref: '#/components/schemas/Price' }
+        description: { type: string, nullable: true }
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/Taxonomy' }
+        hours: { $ref: '#/components/schemas/OpeningHours' }
+        address: { type: string }
+        lat: { type: number, format: double }
+        lng: { type: number, format: double }
+        phone: { type: string, nullable: true }
+        website: { type: string, nullable: true }
+        notes: { type: string, nullable: true, description: Lưu ý }
+        reservationRecommended: { type: boolean, nullable: true }
+        distanceKm: { type: number, format: double, nullable: true }
+        verifiedAt: { type: string, format: date, nullable: true, description: Ngày cập nhật/kiểm tra }
+    PlaceReportReason:
+      type: string
+      enum: [WRONG_PRICE, WRONG_HOURS, WRONG_ADDRESS, CLOSED, WRONG_IMAGE, OTHER]
+    PlaceReportCreate:
+      type: object
+      required: [reason]
+      properties:
+        reason: { $ref: '#/components/schemas/PlaceReportReason' }
+        description: { type: string, maxLength: 2000 }
+        fileId: { type: string, format: uuid }
+    PlaceReportReceipt:
+      type: object
+      required: [id, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/PlaceReportStatus' }
+        createdAt: { type: string, format: date-time }
+
+    # ── auth / user ──
+    Role:
+      type: string
+      enum: [MEMBER, EDITOR, REVIEWER, SUPPORT, SUPER_ADMIN]
+    UserStatus:
+      type: string
+      enum: [ACTIVE, LOCKED, DELETION_REQUESTED]
+    AuthToken:
+      type: object
+      required: [accessToken, expiresAt, user]
+      properties:
+        accessToken: { type: string }
+        expiresAt: { type: string, format: date-time }
+        user: { $ref: '#/components/schemas/User' }
+    User:
+      type: object
+      required: [id, email, displayName, roles, status]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        avatarUrl: { type: string, format: uri, nullable: true }
+        roles:
+          type: array
+          items: { $ref: '#/components/schemas/Role' }
+        status: { $ref: '#/components/schemas/UserStatus' }
+    UserUpdate:
+      type: object
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 50 }
+        avatarFileId: { type: string, format: uuid, nullable: true }
+    AdminUser:
+      allOf:
+        - $ref: '#/components/schemas/User'
+        - type: object
+          properties:
+            createdAt: { type: string, format: date-time }
+            lockedReason: { type: string, nullable: true }
+    AdminUserPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AdminUser' }
+        page: { $ref: '#/components/schemas/PageMeta' }
+
+    # ── saved lists ──
+    SavedListWrite:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+    SavedListSummary:
+      type: object
+      required: [id, name, placeCount, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        placeCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+    SavedListDetail:
+      allOf:
+        - $ref: '#/components/schemas/SavedListSummary'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                type: object
+                required: [place, available, addedAt]
+                properties:
+                  place: { $ref: '#/components/schemas/PlaceCard' }
+                  available: { type: boolean, description: 'false = nơi đã ẩn/ngừng; chỉ hiện tên + cảnh báo, không chốt mới' }
+                  addedAt: { type: string, format: date-time }
+
+    # ── choice sessions ──
+    ChoiceSessionStatus:
+      type: string
+      enum: [WAITING, VOTING, FINALIZED]
+    VotePreference:
+      type: string
+      enum: [LIKE, SKIP]
+    ChoiceCandidate:
+      type: object
+      required: [id, place, available]
+      properties:
+        id: { type: string, format: uuid }
+        place: { $ref: '#/components/schemas/PlaceCard' }
+        available: { type: boolean }
+        myVote:
+          allOf: [{ $ref: '#/components/schemas/VotePreference' }]
+          nullable: true
+          description: null = Chưa trả lời (không phải Bỏ qua)
+        partnerVote:
+          allOf: [{ $ref: '#/components/schemas/VotePreference' }]
+          nullable: true
+          description: Có được thấy phiếu riêng của nhau không — OQ-07
+        mutualLike: { type: boolean }
+    ChoiceSession:
+      type: object
+      required: [id, status, viewerRole, candidates, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: '#/components/schemas/ChoiceSessionStatus' }
+        viewerRole: { type: string, enum: [CREATOR, RECIPIENT] }
+        creatorName: { type: string }
+        recipientName: { type: string, nullable: true }
+        candidates:
+          type: array
+          minItems: 2
+          maxItems: 5
+          items: { $ref: '#/components/schemas/ChoiceCandidate' }
+        activeShareGrant: { $ref: '#/components/schemas/ShareGrant' }
+        datePlanId: { type: string, format: uuid, nullable: true }
+        createdAt: { type: string, format: date-time }
+        finalizedAt: { type: string, format: date-time, nullable: true }
+    ShareGrant:
+      type: object
+      required: [id, expiresAt, status]
+      properties:
+        id: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+        status: { type: string, enum: [VALID, EXPIRED, REVOKED] }
+    ShareGrantCreated:
+      allOf:
+        - $ref: '#/components/schemas/ShareGrant'
+        - type: object
+          required: [inviteToken, inviteUrl]
+          properties:
+            inviteToken: { type: string, description: Chỉ trả một lần; server chỉ lưu hash }
+            inviteUrl: { type: string, format: uri }
+    ChoiceSessionCreated:
+      allOf:
+        - $ref: '#/components/schemas/ChoiceSession'
+        - type: object
+          required: [shareGrant]
+          properties:
+            shareGrant: { $ref: '#/components/schemas/ShareGrantCreated' }
+    ShareGrantPreview:
+      type: object
+      required: [creatorName, candidateCount, candidates, slotAvailable]
+      properties:
+        creatorName: { type: string }
+        candidateCount: { type: integer }
+        candidates:
+          type: array
+          description: Chỉ nội dung được chia sẻ; xem trước không chiếm suất hoặc bắt nhập tên.
+          items: { $ref: '#/components/schemas/PlaceCard' }
+        slotAvailable: { type: boolean }
+        expiresAt: { type: string, format: date-time }
+    RecipientSessionToken:
+      type: object
+      required: [recipientSession, choiceSessionId]
+      properties:
+        recipientSession: { type: string, description: Gửi lại qua header X-Recipient-Session }
+        choiceSessionId: { type: string, format: uuid }
+
+    # ── date plans ──
+    PlaceVisitCount:
+      type: object
+      required: [placeId, count]
+      properties:
+        placeId: { type: string, format: uuid }
+        count: { type: integer, format: int64, minimum: 0 }
+    DateReminderStatus:
+      type: string
+      enum: [PENDING, SHOWN, DISMISSED, ANSWERED, CANCELLED]
+    DateReminder:
+      type: object
+      required: [id, planId, scheduledAt, status]
+      properties:
+        id: { type: string, format: uuid }
+        planId: { type: string, format: uuid }
+        scheduledAt: { type: string, format: date-time }
+        status: { $ref: '#/components/schemas/DateReminderStatus' }
+        dismissedAt: { type: string, format: date-time, nullable: true }
+        answeredAt: { type: string, format: date-time, nullable: true }
+    DateReminderState:
+      type: object
+      required: [reminder, shouldShow, canRespond]
+      properties:
+        reminder:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/DateReminder' }]
+        shouldShow: { type: boolean, description: 'Server tính theo scheduledAt/quyền/plan và trạng thái nhắc, không phải plan PAST.' }
+        canRespond: { type: boolean, description: 'Theo actor đã duyệt; không mặc định người nhận link được ghi lượt cá nhân.' }
+    DateReminderAction:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [CONFIRM_VISIT, DISMISS] }
+    DatePlanStatus:
+      type: string
+      enum: [SCHEDULED, CANCELLED, PAST]
+    DatePlanWrite:
+      type: object
+      required: [placeId, scheduledAt]
+      properties:
+        placeId: { type: string, format: uuid }
+        scheduledAt: { type: string, format: date-time, description: Phải ở tương lai }
+        note: { type: string, maxLength: 1000 }
+    DatePlanUpdate:
+      type: object
+      properties:
+        placeId: { type: string, format: uuid }
+        scheduledAt: { type: string, format: date-time }
+        note: { type: string, maxLength: 1000, nullable: true }
+    DatePlan:
+      type: object
+      required: [id, place, scheduledAt, status, viewerRole, reservationHeld, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        place: { $ref: '#/components/schemas/PlaceCard' }
+        placeAvailable: { type: boolean }
+        scheduledAt: { type: string, format: date-time }
+        note: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/DatePlanStatus' }
+        viewerRole: { type: string, enum: [OWNER, RECIPIENT] }
+        reservationHeld:
+          type: boolean
+          enum: [false]
+          description: G1 luôn false — UI hiển thị "Kế hoạch này chưa giữ chỗ tại địa điểm"
+        choiceSessionId: { type: string, format: uuid, nullable: true }
+        visitAnswer: { type: string, enum: [YES, NO], nullable: true, description: null = Chưa trả lời }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/Warning' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    # ── support / notifications ──
+    TicketStatus:
+      type: string
+      enum: [NEW, IN_PROGRESS, WAITING_CUSTOMER, CLOSED]
+    MessageVisibility:
+      type: string
+      enum: [PUBLIC, INTERNAL]
+    SupportTicketCreate:
+      type: object
+      required: [category, subject, body]
+      properties:
+        category: { type: string, enum: [ACCOUNT, PLACE_INFO, DATE_PLAN, OTHER] }
+        subject: { type: string, maxLength: 150 }
+        body: { type: string, maxLength: 5000 }
+        fileIds:
+          type: array
+          maxItems: 5
+          items: { type: string, format: uuid }
+    MessageCreate:
+      type: object
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 5000 }
+        fileIds:
+          type: array
+          maxItems: 5
+          items: { type: string, format: uuid }
+    SupportMessage:
+      type: object
+      required: [id, authorName, visibility, body, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        authorName: { type: string }
+        fromStaff: { type: boolean }
+        visibility: { $ref: '#/components/schemas/MessageVisibility' }
+        body: { type: string }
+        attachments:
+          type: array
+          items: { $ref: '#/components/schemas/StoredFile' }
+        createdAt: { type: string, format: date-time }
+    SupportTicket:
+      type: object
+      required: [id, category, subject, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        category: { type: string }
+        subject: { type: string }
+        status: { $ref: '#/components/schemas/TicketStatus' }
+        assigneeName: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    SupportTicketDetail:
+      allOf:
+        - $ref: '#/components/schemas/SupportTicket'
+        - type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              items: { $ref: '#/components/schemas/SupportMessage' }
+    SupportTicketPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/SupportTicket' }
+        page: { $ref: '#/components/schemas/PageMeta' }
+    Notification:
+      type: object
+      required: [id, type, summary, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [DATE_PLAN_UPDATED, DATE_PLAN_CANCELLED, SUPPORT_REPLIED, SUPPORT_STATUS_CHANGED] }
+        objectType: { type: string }
+        objectId: { type: string, format: uuid }
+        summary: { type: string, description: Nội dung tối thiểu; mở đối tượng phải kiểm tra quyền lại }
+        readAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+    NotificationPage:
+      type: object
+      required: [items, page, unreadCount]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Notification' }
+        page: { $ref: '#/components/schemas/PageMeta' }
+        unreadCount: { type: integer }
+
+    # ── uploads / events ──
+    StoredFile:
+      type: object
+      required: [id, contentType, sizeBytes]
+      properties:
+        id: { type: string, format: uuid }
+        contentType: { type: string }
+        sizeBytes: { type: integer, format: int64 }
+        url: { type: string, format: uri, nullable: true, description: URL có hạn; không công khai tệp bị từ chối }
+    AnalyticsEvent:
+      type: object
+      required: [eventId, name, occurredAt, sessionId, platform]
+      description: Không gửi token, OTP, ghi chú riêng, vị trí chính xác không cần thiết.
+      properties:
+        eventId: { type: string, format: uuid }
+        name:
+          type: string
+          enum: [search_submitted, results_shown, place_viewed, place_saved, comparison_opened, invite_created, vote_submitted, date_plan_created, visit_self_reported]
+        occurredAt: { type: string, format: date-time }
+        sessionId: { type: string, maxLength: 64 }
+        anonymousId: { type: string, maxLength: 64, description: Bắt buộc nếu chưa đăng nhập }
+        platform: { $ref: '#/components/schemas/Platform' }
+        objectId: { type: string, maxLength: 64 }
+        properties:
+          type: object
+          description: Whitelist theo từng event — đội giải pháp rà soát
+          additionalProperties:
+            type: string
+
+    # ── admin ──
+    AdminPlaceWrite:
+      type: object
+      required: [code, name, categoryId, areaId, address, lat, lng]
+      description: Đủ trường để lưu nháp; điều kiện xuất bản đầy đủ kiểm tra khi APPROVE (RULE-20).
+      properties:
+        code: { type: string, pattern: '^[A-Z0-9_-]{3,40}$', description: Mã chi nhánh duy nhất }
+        name: { type: string, maxLength: 150 }
+        categoryId: { type: string, format: uuid }
+        areaId: { type: string, format: uuid }
+        address: { type: string, maxLength: 300 }
+        lat: { type: number, format: double, minimum: -90, maximum: 90 }
+        lng: { type: number, format: double, minimum: -180, maximum: 180 }
+        description: { type: string, maxLength: 5000 }
+        phone: { type: string, maxLength: 20 }
+        website: { type: string, format: uri }
+        notes: { type: string, maxLength: 2000 }
+        reservationRecommended: { type: boolean, nullable: true }
+        tagIds:
+          type: array
+          items: { type: string, format: uuid }
+        price:
+          allOf:
+            - $ref: '#/components/schemas/Price'
+            - type: object
+              properties:
+                source: { type: string, maxLength: 500 }
+        hours: { $ref: '#/components/schemas/OpeningHours' }
+        source: { type: string, maxLength: 500, description: Nguồn dữ liệu }
+        verifiedAt: { type: string, format: date }
+    AdminPlace:
+      allOf:
+        - $ref: '#/components/schemas/PlaceDetail'
+        - type: object
+          required: [status]
+          properties:
+            status: { $ref: '#/components/schemas/PlaceStatus' }
+            statusReason: { type: string, nullable: true }
+            source: { type: string, nullable: true }
+            createdBy: { type: string, format: uuid }
+            reviewedBy: { type: string, format: uuid, nullable: true }
+            publishBlockers:
+              type: array
+              description: Lỗi còn thiếu theo RULE-20 (rỗng = đủ điều kiện duyệt)
+              items: { type: string }
+            createdAt: { type: string, format: date-time }
+            updatedAt: { type: string, format: date-time }
+    AdminPlacePage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AdminPlace' }
+        page: { $ref: '#/components/schemas/PageMeta' }
+    PlaceReportStatus:
+      type: string
+      enum: [NEW, CHECKING, RESOLVED, INSUFFICIENT]
+    PlaceReport:
+      type: object
+      required: [id, placeId, placeName, reason, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        placeId: { type: string, format: uuid }
+        placeName: { type: string }
+        reason: { $ref: '#/components/schemas/PlaceReportReason' }
+        description: { type: string, nullable: true }
+        attachment: { $ref: '#/components/schemas/StoredFile' }
+        senderUserId: { type: string, format: uuid, nullable: true }
+        assigneeId: { type: string, format: uuid, nullable: true }
+        status: { $ref: '#/components/schemas/PlaceReportStatus' }
+        resolutionNote: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    PlaceReportPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PlaceReport' }
+        page: { $ref: '#/components/schemas/PageMeta' }
+    ImportBatch:
+      type: object
+      required: [id, status, totalRows, errorRows, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [VALIDATED, INVALID, COMMITTED] }
+        templateVersion: { type: string }
+        totalRows: { type: integer }
+        errorRows: { type: integer }
+        rows:
+          type: array
+          items:
+            type: object
+            required: [rowNumber, valid]
+            properties:
+              rowNumber: { type: integer }
+              placeCode: { type: string, nullable: true }
+              valid: { type: boolean }
+              errors:
+                type: array
+                items: { type: string }
+        createdAt: { type: string, format: date-time }
+        committedAt: { type: string, format: date-time, nullable: true }
+    AuditLog:
+      type: object
+      required: [id, action, objectType, createdAt]
+      properties:
+        id: { type: integer, format: int64 }
+        actorId: { type: string, format: uuid, nullable: true }
+        action: { type: string }
+        objectType: { type: string }
+        objectId: { type: string }
+        before: { type: object, nullable: true }
+        after: { type: object, nullable: true }
+        reason: { type: string, nullable: true }
+        traceId: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    AuditLogPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AuditLog' }
+        page: { $ref: '#/components/schemas/PageMeta' }
+    MetricValue:
+      type: object
+      description: value null = "Chưa có dữ liệu/Không áp dụng" (mẫu số 0, cohort chưa đủ tuổi)
+      properties:
+        value: { type: number, format: double, nullable: true }
+        note: { type: string, nullable: true }
+    ReportSummary:
+      type: object
+      required: [dataUpdatedAt]
+      properties:
+        dataUpdatedAt: { type: string, format: date-time }
+        activeMembers: { $ref: '#/components/schemas/MetricValue' }
+        activeAnonymous: { $ref: '#/components/schemas/MetricValue' }
+        searches: { $ref: '#/components/schemas/MetricValue' }
+        zeroResultRate: { $ref: '#/components/schemas/MetricValue' }
+        placeViews: { $ref: '#/components/schemas/MetricValue' }
+        saves: { $ref: '#/components/schemas/MetricValue' }
+        searchToPlanRate: { $ref: '#/components/schemas/MetricValue' }
+        medianMinutesToPlan: { $ref: '#/components/schemas/MetricValue' }
+        retention30d: { $ref: '#/components/schemas/MetricValue' }
+        placesMissingPrice: { $ref: '#/components/schemas/MetricValue' }
+        placesMissingHours: { $ref: '#/components/schemas/MetricValue' }
+        placesVerificationOverdue: { $ref: '#/components/schemas/MetricValue' }
+        openPlaceReports: { $ref: '#/components/schemas/MetricValue' }

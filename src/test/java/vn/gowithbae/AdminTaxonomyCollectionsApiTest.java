@@ -33,7 +33,7 @@ import com.jayway.jsonpath.JsonPath;
 @Testcontainers(disabledWithoutDocker = true)
 @Import(TestcontainersConfiguration.class)
 @SpringBootTest(properties = {
-        "app.jwt.secret=" + TestJwt.SECRET,
+        "app.jwt.secret=test-secret-test-secret-test-secret-123",
         "app.files.public-base-url=https://cdn.test/files",
         "DB_URL=", "DB_USERNAME=", "DB_PASSWORD="
 })
@@ -43,6 +43,11 @@ class AdminTaxonomyCollectionsApiTest {
     @Autowired MockMvc mvc;
     @Autowired JdbcClient jdbc;
     @Autowired JwtEncoder encoder;
+
+    /** Token thật của phần A: gán vai trò trong user_role và tạo access_session (TestJwtFactory). */
+    private String bearer(UUID userId, String role) {
+        return "Bearer " + new TestJwtFactory(jdbc, encoder).token(userId, role);
+    }
 
     UUID admin;
     UUID editor;
@@ -80,7 +85,7 @@ class AdminTaxonomyCollectionsApiTest {
     }
 
     private ResultActions call(MockHttpServletRequestBuilder req, UUID actor, String role, String body) throws Exception {
-        req.header("Authorization", TestJwt.bearer(jdbc, encoder, actor, role));
+        req.header("Authorization", bearer(actor, role));
         if (body != null) {
             req.contentType(MediaType.APPLICATION_JSON).content(body);
         }

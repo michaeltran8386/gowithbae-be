@@ -1,0 +1,14 @@
+# Import from application.yml. Images only: PNG/JPEG, <=8192 per axis and <=16M pixels.
+# Local storage stays private; no static resource mapping or public URL.
+# On Windows restrict the root ACL to the service account before deployment.
+app:
+  files:
+    root: .local-data/uploads
+    max-bytes: 5242880
+    upload-limit-per-minute: 20
+spring:
+  servlet:
+    multipart:
+      max-file-size: ${app.files.max-bytes}B
+      # Allows multipart headers around the bounded image payload.
+      max-request-size: ${app.files.max-request-size:6MB}
