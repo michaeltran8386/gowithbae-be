@@ -1,0 +1,8 @@
+target/
+.env
+.git/
+.local-data/
+bai-cut-cua-A-va-B/
+docs/
+scripts/
+*.md
