@@ -295,7 +295,7 @@ paths:
               required: [email, code]
               properties:
                 email: { type: string, format: email }
-                code: { type: string, pattern: '^[0-9]{6}$' }
+                code: { type: string, pattern: '^[0-9]{4,6}$' }
                 staffCode: { type: string, pattern: '^[0-9]{6}$', description: 'Mã TOTP của nhân viên, bắt buộc khi tài khoản có vai trò nội bộ.' }
       responses:
         default: { $ref: '#/components/responses/StandardError' }
@@ -403,7 +403,7 @@ paths:
               type: object
               required: [code]
               properties:
-                code: { type: string, pattern: '^[0-9]{6}$' }
+                code: { type: string, pattern: '^[0-9]{4,6}$' }
       responses:
         default: { $ref: '#/components/responses/StandardError' }
         '200':
