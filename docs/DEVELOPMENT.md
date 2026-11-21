@@ -354,6 +354,39 @@ Admin sau tạo trong **Tài khoản → Tạo tài khoản**, chọn vai trò A
 - Ảnh địa điểm phục vụ qua `GET /api/v1/files/{id}` và nằm trong volume `gwb-uploads`. Xóa volume là mất ảnh. Production vẫn cần chọn nơi lưu trữ (OQ-21).
 - Lịch sử phiên lưu IP và thiết bị; nội dung trang Quyền riêng tư phải nêu điều này.
 
+## 11. Deploy (Render + Vercel + Supabase)
+
+| Thành phần | Nơi chạy |
+|---|---|
+| Backend | Render: https://gowithbae-be.onrender.com (image từ `Dockerfile`, nhánh `dev`) |
+| Frontend | Vercel: https://gowithbae.vercel.app (repo `gowithbae-fe`, `vercel.json` chuyển `/api/*` sang Render) |
+| Database | Supabase `gowithbae-dev`; Flyway tự chạy migration khi backend khởi động |
+| Ảnh, tệp | Supabase Storage, bucket riêng tư `gowithbae-files` (tối đa 5 MB, PNG/JPEG) |
+
+### 11.1 Biến môi trường trên Render
+
+Ngoài `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, SMTP:
+
+| Biến | Giá trị |
+|---|---|
+| `FILES_STORAGE` | `supabase`. **Bắt buộc trên Render**: máy Render không có ổ đĩa lâu dài, để `local` thì ảnh mất mỗi lần deploy hoặc khởi động lại |
+| `SUPABASE_URL` | `https://yizimbogkbwywsamuolj.supabase.co` |
+| `SUPABASE_SERVICE_KEY` | Secret key: Supabase → Project Settings → API Keys → Secret keys (`sb_secret_...`). Không đưa ra frontend |
+| `SUPABASE_STORAGE_BUCKET` | `gowithbae-files` (mặc định, có thể bỏ) |
+| `APP_WEB_BASE_URL` | `https://gowithbae.vercel.app` (link kích hoạt admin, link mời xem kế hoạch) |
+| `APP_INVITE_BASE_URL` | `https://gowithbae.vercel.app/invite` (link mời cùng chọn, phải kèm `/invite`) |
+
+Backend vẫn phục vụ ảnh qua `GET /api/v1/files/{id}` và giữ nguyên quy tắc ảnh nào được công khai; bucket không bật public.
+
+### 11.2 Tạo admin trên production (Render không có Shell)
+
+1. Trên Render thêm `APP_ADMIN_BOOTSTRAP_EMAIL=<email>` và `APP_ADMIN_BOOTSTRAP_EXIT=false`, rồi deploy lại.
+2. Mở Logs của Render, tìm dòng `Đã cấp quyền SUPER_ADMIN cho …` và link `https://gowithbae.vercel.app/admin/activate/<token>` ngay sau đó (hạn 24 giờ).
+3. Mở link, quét QR bằng Google Authenticator, nhập mã để kích hoạt; đăng nhập tại `/login` (email → mã OTP trong email → mã Authenticator).
+4. **Xóa hai biến** trên Render. Nếu quên, lần khởi động sau backend chỉ in "đã kích hoạt, bỏ qua", không đổi link hay đăng xuất ai.
+
+Có Shell thì dùng lệnh một lần: `java -jar /app/app.jar --server.port=0 --app.admin.bootstrap-email=<email>`.
+
 ## CR-001: endpoint, database và nghiệm thu
 
 Nguồn hiện hành: SRS hợp nhất v1.3 (Requirements v1.1), §4/7/13/17. Ba hành vi đã CONF không hỏi lại; actor xác nhận, sửa lượt và nhắc lại sau đổi giờ còn OQ-10/25.

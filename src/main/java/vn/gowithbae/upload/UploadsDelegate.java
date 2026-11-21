@@ -29,13 +29,13 @@ public class UploadsDelegate implements UploadsApiDelegate {
     private final CurrentUser user;
     private final RequestRateLimiter limiter;
     private final NativeWebRequest request;
-    private final LocalFileStorage storage;
+    private final FileStorage storage;
     private final TransactionTemplate transaction;
     private final int maxBytes;
     private final int perMinute;
 
     public UploadsDelegate(JdbcClient jdbc, CurrentUser user, RequestRateLimiter limiter,
-            NativeWebRequest request, LocalFileStorage storage, PlatformTransactionManager manager,
+            NativeWebRequest request, FileStorage storage, PlatformTransactionManager manager,
             @Value("${app.files.max-bytes:5242880}") int maxBytes,
             @Value("${app.files.upload-limit-per-minute:20}") int perMinute) {
         if (maxBytes < 1 || maxBytes == Integer.MAX_VALUE || perMinute < 1) throw new IllegalArgumentException("Invalid upload limits");

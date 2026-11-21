@@ -13,14 +13,14 @@ public class FileService {
     public record FileMetadata(UUID id, UUID ownerUserId, String purpose, String contentType, long sizeBytes) {}
 
     private final JdbcClient jdbc;
-    private vn.gowithbae.upload.LocalFileStorage storage;
+    private vn.gowithbae.upload.FileStorage storage;
 
     public FileService(JdbcClient jdbc) {
         this.jdbc = jdbc;
     }
 
     @org.springframework.beans.factory.annotation.Autowired
-    void setStorage(vn.gowithbae.upload.LocalFileStorage storage) {
+    void setStorage(vn.gowithbae.upload.FileStorage storage) {
         this.storage = storage;
     }
 

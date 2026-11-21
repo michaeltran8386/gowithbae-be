@@ -44,6 +44,14 @@ app:
     # Ngày kiểm tra cũ hơn số ngày này thì tính là "quá hạn xác minh" trong báo cáo (OQ-20 chưa chốt ngưỡng).
     verification-max-age-days: ${PLACES_VERIFICATION_MAX_AGE_DAYS:180}
   files:
+    # Nơi lưu nội dung tệp: local (thư mục trên đĩa, mặc định) hoặc supabase (Supabase Storage, bucket riêng tư).
+    # Máy chủ không có ổ đĩa lâu dài (Render) phải dùng supabase, nếu không ảnh mất mỗi lần khởi động lại.
+    storage: ${FILES_STORAGE:local}
+    supabase:
+      url: ${SUPABASE_URL:}
+      # Secret key (sb_secret_...) hoặc service_role key. Chỉ đặt ở server, không đưa ra frontend.
+      service-key: ${SUPABASE_SERVICE_KEY:}
+      bucket: ${SUPABASE_STORAGE_BUCKET:gowithbae-files}
     # URL gốc ghép với id tệp cho ảnh địa điểm/bộ sưu tập. Để trống = /api/v1/files/ (backend tự phục vụ ảnh đã gắn).
     # Đặt khi chuyển sang CDN/lưu trữ ngoài phục vụ theo id (OQ-21).
     public-base-url: ${FILES_PUBLIC_BASE_URL:}
