@@ -1,0 +1,79 @@
+# Chạy cả hệ thống GoWithBae trên máy: database, hộp thư giả, backend, web.
+#
+#   cd gowithbae-be/docker
+#   cp .env.example .env        # điền DB_PASSWORD, JWT_SECRET (và FE_DIR nếu thư mục frontend không tên gowithbae-fe)
+#   docker compose up -d --build
+#
+# Web http://localhost:8081 · hộp thư giả (mã OTP) http://localhost:8025 · API http://localhost:8090/api/v1
+# Hướng dẫn đầy đủ (dữ liệu demo, tạo admin đầu tiên): docs/DEVELOPMENT.md §9–10.
+name: gowithbae
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: gwb-db
+    environment:
+      POSTGRES_DB: gowithbae
+      POSTGRES_USER: gowithbae
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Đặt DB_PASSWORD trong docker/.env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      # Dữ liệu demo: docker compose exec db psql -U gowithbae -d gowithbae -f /seed/dev-seed.sql
+      - ../scripts:/seed:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gowithbae -d gowithbae"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mail:
+    image: axllent/mailpit:v1.27
+    container_name: gwb-mail
+    ports:
+      - "8025:8025"
+
+  # Tên service phải là "backend": nginx của web chuyển /api/ sang http://backend:8080.
+  backend:
+    build: ..
+    image: gowithbae-backend:dev
+    container_name: gwb-api
+    depends_on:
+      db:
+        condition: service_healthy
+      mail:
+        condition: service_started
+    # Secret (JWT_SECRET, DB_PASSWORD, AUTH_MFA_KEY nếu có) lấy từ docker/.env.
+    # Không khai AUTH_MFA_KEY rỗng ở đây: để trống thì backend dùng khóa dẫn xuất từ JWT_SECRET.
+    env_file: .env
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/gowithbae
+      DB_USERNAME: gowithbae
+      SMTP_HOST: mail
+      SMTP_PORT: "1025"
+      SMTP_AUTH: "false"
+      SMTP_STARTTLS: "false"
+      SMTP_FROM: no-reply@gowithbae.local
+      APP_WEB_BASE_URL: ${WEB_URL:-http://localhost:8081}
+      APP_INVITE_BASE_URL: ${WEB_URL:-http://localhost:8081}/invite
+    ports:
+      - "8090:8080"
+    volumes:
+      - uploads:/app/.local-data/uploads
+
+  web:
+    build: ${FE_DIR:-../../gowithbae-fe}
+    image: gowithbae-frontend:dev
+    container_name: gwb-web
+    depends_on:
+      - backend
+    ports:
+      - "8081:80"
+
+volumes:
+  # Tên cố định để giữ dữ liệu của các container tạo bằng `docker run` trước đây.
+  dbdata:
+    name: gwb-dbdata
+  uploads:
+    name: gwb-uploads

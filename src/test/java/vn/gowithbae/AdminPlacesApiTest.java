@@ -279,7 +279,8 @@ class AdminPlacesApiTest {
     }
 
     @Test
-    void cannotApproveOwnPlaceEvenAsSuperAdmin() throws Exception {
+    void superAdminMayApproveOwnPlace() throws Exception {
+        // OQ-18 đã chốt: chủ dự án (SUPER_ADMIN) vận hành một mình nên được tự duyệt; nhật ký vẫn ghi người duyệt.
         String id = createId(superAdmin, "SUPER_ADMIN", fullPlace("CF-050", "Tự duyệt", 200000));
         mvc.perform(post("/api/v1/admin/places/{id}/images", id)
                         .header("Authorization", bearer(superAdmin, "SUPER_ADMIN"))
@@ -287,7 +288,11 @@ class AdminPlacesApiTest {
                         .content("{\"fileId\":\"%s\",\"sourceRights\":\"Ảnh tự chụp\",\"cover\":true}".formatted(placeImageFile("PLACE_IMAGE"))))
                 .andExpect(status().isCreated());
         transition(superAdmin, "SUPER_ADMIN", id, "SUBMIT", null).andExpect(status().isOk());
-        transition(superAdmin, "SUPER_ADMIN", id, "APPROVE", null).andExpect(status().isForbidden());
+        transition(superAdmin, "SUPER_ADMIN", id, "APPROVE", null).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PUBLISHED"));
+        org.assertj.core.api.Assertions.assertThat(jdbc.sql(
+                "SELECT count(*) FROM audit_log WHERE object_id = :id AND action = 'PLACE_APPROVE' AND actor_id = :a")
+                .param("id", id).param("a", superAdmin).query(Long.class).single()).isEqualTo(1L);
     }
 
     @Test

@@ -1,6 +1,6 @@
 # Luồng chức năng — Backend GoWithBae G1
 
-Tài liệu cho thành viên mới: hệ thống đang làm được gì, mỗi luồng gọi API nào theo thứ tự nào, quy tắc nào chặn ở server, và code nằm ở đâu. Chi tiết request/response xem `api/openapi.yaml` (contract 0.4.0); cách chạy và quy ước code xem [DEVELOPMENT.md](DEVELOPMENT.md).
+Tài liệu cho thành viên mới: hệ thống đang làm được gì, mỗi luồng gọi API nào theo thứ tự nào, quy tắc nào chặn ở server, và code nằm ở đâu. Chi tiết request/response xem `api/openapi.yaml` (contract 0.5.0); cách chạy và quy ước code xem [DEVELOPMENT.md](DEVELOPMENT.md).
 
 Mọi đường dẫn bên dưới có tiền tố `/api/v1`. Lỗi trả `application/problem+json` (`status`, `detail`, có thể có `code`, `errors[]` theo trường).
 
@@ -85,24 +85,39 @@ POST /auth/otp/verify {email, code, staffCode}  → 200 / 400 nếu mã TOTP sai
 
 - Thu hồi link: `DELETE /choice-sessions/{id}/share-grants/{grantId}`; bỏ người tham gia: `DELETE .../recipient`.
 - URL link mời = `APP_INVITE_BASE_URL` (phải kèm `/invite`) + `/<token>`; để trống thì suy ra từ request.
-- Kế hoạch tạo thẳng ở `POST /date-plans {placeId, scheduledAt, note?}` thì **chỉ chủ xem được**. Hiện chưa có API chia sẻ kế hoạch tạo tay.
+- Kế hoạch tạo thẳng ở `POST /date-plans {placeId, scheduledAt, note?}` không có người nhận; muốn mời thì dùng link mời xem kế hoạch (§3.4).
 
 ### 3.3 Kế hoạch hẹn (C)
 
 `GET/POST /date-plans`, `GET/PATCH /date-plans/{id}`, `POST .../cancel`, `GET .../calendar.ics` (thêm vào lịch). Sau giờ hẹn: lời nhắc "Đi chưa?" (`GET/PUT .../reminder`), xác nhận đã đi (`PUT .../visit-report`), số lần đã đi (`GET /me/places/{placeId}/visit-count`). Sửa hoặc hủy thì gửi thông báo cho bên còn lại.
 
-### 3.4 Báo sai địa điểm (C)
+### 3.4 Mời người ấy xem kế hoạch tạo tay (C)
+
+```
+Chủ:      POST   /date-plans/{id}/invite   → {inviteUrl, expiresAt}  (link trả MỘT lần; tạo lại thì link cũ hết hiệu lực, câu trả lời cũ bị xóa)
+          GET    /date-plans/{id}/invite   → trạng thái: đã trả lời chưa, GOING | NOT_GOING, tên người trả lời (404 nếu chưa có link)
+          DELETE /date-plans/{id}/invite   → thu hồi
+Người ấy: GET    /plan-invites/{token}                 → giờ, địa điểm, trạng thái kế hoạch; KHÔNG có ghi chú riêng; không cần tài khoản
+          PUT    /plan-invites/{token}/response {response: GOING | NOT_GOING, guestName?}  → chủ nhận thông báo DATE_PLAN_INVITE_RESPONDED
+          GET    /plan-invites/{token}/calendar.ics    → thêm vào lịch
+```
+
+- Chỉ mời được kế hoạch của mình, đang `SCHEDULED` và chưa qua giờ (409). Mỗi kế hoạch tối đa một link đang hiệu lực (bảng `date_plan_invite`, V403, chỉ lưu hash token).
+- Link hết hạn 1 ngày sau giờ hẹn (đổi giờ thì hạn đổi theo), khi bị thu hồi, hoặc khi chủ không còn hoạt động → 410. Kế hoạch bị hủy: người nhận vẫn xem được trạng thái "đã hủy" nhưng không trả lời được.
+- URL link = `APP_WEB_BASE_URL` + `/plan-invite/<token>`.
+
+### 3.5 Báo sai địa điểm (C)
 
 `POST /places/{placeId}/reports {reason, description?, fileId?}`: gửi được cả khi chưa đăng nhập, có giới hạn tần suất (429). Không tự sửa dữ liệu công khai; admin xử lý ở §4.7.
 
-### 3.5 Hỗ trợ (C)
+### 3.6 Hỗ trợ (C)
 
 `POST /support-tickets {category, subject, body}`, `GET /support-tickets[/{id}]`, `POST /support-tickets/{id}/messages`. Thành viên chỉ thấy tin `PUBLIC`. Ticket `CLOSED` không trả lời và không mở lại được.
 
-### 3.6 Tài khoản, thông báo, upload (A)
+### 3.7 Tài khoản, thông báo, upload (A)
 
 - `GET/PATCH /me`, đổi email (`/me/email-change` + `/verify`), yêu cầu xóa (`/me/deletion-request`).
-- `GET /notifications`, `POST /notifications/{id}/read`. Loại: kế hoạch đổi/hủy, hỗ trợ trả lời/đổi trạng thái, `ADMIN_ANNOUNCEMENT`.
+- `GET /notifications`, `POST /notifications/{id}/read`. Loại: kế hoạch đổi/hủy, người ấy trả lời lời mời xem kế hoạch, hỗ trợ trả lời/đổi trạng thái, `ADMIN_ANNOUNCEMENT`.
 - `POST /uploads` (multipart `file`, `purpose`): PNG/JPEG ≤ 5 MB, lưu riêng tư; muốn hiển thị công khai phải gắn vào địa điểm/bộ sưu tập.
 - `POST /events`: sự kiện analytics có mã chống trùng.
 
@@ -126,7 +141,7 @@ DRAFT --SUBMIT--> PENDING --APPROVE--> PUBLISHED --HIDE--------> HIDDEN   --REST
 ```
 
 - **SUBMIT/APPROVE chỉ qua khi đủ điều kiện (RULE-20)**: mô tả, loại hình và khu vực còn dùng, ảnh có nguồn/quyền + ảnh bìa, hoạt động chính, trạng thái giá (đã biết hoặc ghi rõ chưa rõ), nguồn + ngày kiểm tra, không trùng chi nhánh. `GET /admin/places/{id}` trả `publishBlockers[]` để giao diện liệt kê.
-- **Không tự duyệt nơi mình tạo (RULE-21)**, kể cả `SUPER_ADMIN` → 403. Muốn xuất bản cần ít nhất 2 admin. (OQ-18: PO có thể đổi.)
+- **Tự duyệt (RULE-21, OQ-18 đã chốt 21/11/2026):** `SUPER_ADMIN` được duyệt nơi do chính mình tạo, vì chủ dự án vận hành một mình. Vai trò khác (REVIEWER kiêm EDITOR) vẫn bị chặn → 403. Nhật ký vẫn ghi người duyệt.
 - HIDE/DEACTIVATE/RETURN bắt buộc lý do. Mọi thao tác ghi `audit_log`.
 
 ### 4.2 Nhập CSV (B)
@@ -172,13 +187,18 @@ Tối đa 2 MB, 1000 dòng. Nhãn nhiều mã cách nhau bằng `;`. Giá `KNOWN
 - `GET /admin/place-reports[/{id}]`, `POST .../transitions {status, note?}`: `NEW → CHECKING → RESOLVED | INSUFFICIENT` (đóng bắt buộc ghi chú); đã đóng chỉ mở lại về `CHECKING`.
 - `GET /admin/support-tickets[/{id}]`, `POST .../messages {body, visibility: PUBLIC | INTERNAL}`, `POST .../transitions {status}`. Trả lời `PUBLIC` gửi thông báo cho thành viên và chuyển `NEW → IN_PROGRESS`; `INTERNAL` không bao giờ lộ cho thành viên.
 
-## 5. Thử nhanh bằng Docker
+## 5. Thử nhanh bằng Docker Compose
 
-Xem DEVELOPMENT.md §9–10. Tóm tắt: build 2 image → chạy `gwb-db`, `gwb-mail`, `gwb-api`, `gwb-web` → web http://localhost:8081, hộp thư giả http://localhost:8025 (mã OTP), tạo admin đầu tiên bằng lệnh bootstrap.
+```powershell
+cd gowithbae-be/docker
+copy .env.example .env      # điền DB_PASSWORD, JWT_SECRET
+docker compose up -d --build
+docker compose run --rm backend --app.admin.bootstrap-email=<email-của-bạn>
+```
+
+Web http://localhost:8081, hộp thư giả (mã OTP) http://localhost:8025. Chi tiết: DEVELOPMENT.md §9–10.
 
 ## 6. Còn thiếu / đang chờ quyết định
 
-- RULE-21 với một admin duy nhất (OQ-18): giữ "cần 2 admin" hay cho `SUPER_ADMIN` tự duyệt.
-- Chia sẻ kế hoạch tạo tay (không qua cùng chọn): chưa có API.
 - Lưu ảnh production (OQ-21): đang lưu trên đĩa container (`gwb-uploads`).
 - Ngưỡng quá hạn xác minh (OQ-20), SMTP thật, backup và chính sách giữ dữ liệu: chưa chốt.

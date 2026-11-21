@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: GoWithBae G1 API
-  version: 0.4.0
+  version: 0.5.0
   description: |
     API contract cho GoWithBae G1 (web khách hàng + quản trị nội bộ).
     Nguồn yêu cầu: `GWB-REQ-G1` v1.1 (15-11-2026), SRS hợp nhất v1.2 và CR-001.
@@ -35,6 +35,8 @@ tags:
     description: Link mời và tham gia của người nhận (FR-11, FR-14)
   - name: DatePlans
     description: Kế hoạch buổi hẹn (FR-15..18)
+  - name: PlanInvites
+    description: Link mời người ấy xem kế hoạch tạo tay và trả lời có đi hay không (không cần tài khoản)
   - name: Support
     description: Yêu cầu hỗ trợ của thành viên (FR-20)
   - name: Notifications
@@ -901,6 +903,92 @@ paths:
             text/calendar:
               schema: { type: string }
         '404': { $ref: '#/components/responses/NotFound' }
+  /date-plans/{planId}/invite:
+    get:
+      tags: [DatePlans]
+      operationId: getDatePlanInvite
+      summary: Trạng thái link mời xem kế hoạch (chỉ chủ); 404 khi chưa có link đang hiệu lực
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanInviteStatus' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [DatePlans]
+      operationId: createDatePlanInvite
+      summary: Tạo link mời người ấy xem kế hoạch; tạo lại thì link cũ mất hiệu lực và câu trả lời cũ bị xóa
+      description: |
+        Chỉ chủ kế hoạch, kế hoạch đang SCHEDULED và chưa qua giờ hẹn. Link chỉ trả MỘT lần (server lưu hash).
+        Link hết hạn 1 ngày sau giờ hẹn, khi bị thu hồi, hoặc khi chủ không còn hoạt động. Người nhận không thấy ghi chú riêng.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanInviteCreated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [DatePlans]
+      operationId: revokeDatePlanInvite
+      summary: Thu hồi link mời xem kế hoạch
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/PlanId' }]
+      responses:
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /plan-invites/{inviteToken}:
+    get:
+      tags: [PlanInvites]
+      operationId: viewPlanInvite
+      summary: Người nhận xem kế hoạch qua link mời (không cần tài khoản, không có ghi chú riêng)
+      parameters: [{ $ref: '#/components/parameters/InviteToken' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanInviteView' }
+        '410': { $ref: '#/components/responses/Gone' }
+  /plan-invites/{inviteToken}/response:
+    put:
+      tags: [PlanInvites]
+      operationId: respondPlanInvite
+      summary: Người nhận trả lời có đi hay không; trả lời lại thì ghi đè. Chủ nhận thông báo
+      parameters: [{ $ref: '#/components/parameters/InviteToken' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanInviteRespond' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanInviteView' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+  /plan-invites/{inviteToken}/calendar.ics:
+    get:
+      tags: [PlanInvites]
+      operationId: downloadPlanInviteCalendar
+      summary: Tệp lịch cho người nhận (không có ghi chú riêng)
+      parameters: [{ $ref: '#/components/parameters/InviteToken' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            text/calendar:
+              schema: { type: string }
+        '410': { $ref: '#/components/responses/Gone' }
   /date-plans/{planId}/visit-report:
     put:
       tags: [DatePlans]
@@ -2790,6 +2878,46 @@ components:
           items: { $ref: '#/components/schemas/Warning' }
         createdAt: { type: string, format: date-time }
         updatedAt: { type: string, format: date-time }
+    PlanInviteResponse:
+      type: string
+      enum: [GOING, NOT_GOING]
+      description: GOING = "Mình sẽ đi", NOT_GOING = "Không đi được"
+    PlanInviteCreated:
+      type: object
+      required: [inviteUrl, expiresAt]
+      properties:
+        inviteUrl: { type: string, description: Chỉ trả một lần }
+        expiresAt: { type: string, format: date-time }
+    PlanInviteStatus:
+      type: object
+      required: [createdAt, expiresAt]
+      properties:
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        response: { allOf: [{ $ref: '#/components/schemas/PlanInviteResponse' }], nullable: true, description: null = chưa trả lời }
+        guestName: { type: string, nullable: true }
+        respondedAt: { type: string, format: date-time, nullable: true }
+    PlanInviteView:
+      type: object
+      required: [ownerName, place, scheduledAt, status, expiresAt]
+      properties:
+        ownerName: { type: string }
+        place: { $ref: '#/components/schemas/PlaceCard' }
+        placeAvailable: { type: boolean }
+        scheduledAt: { type: string, format: date-time }
+        status: { $ref: '#/components/schemas/DatePlanStatus' }
+        expiresAt: { type: string, format: date-time }
+        response: { allOf: [{ $ref: '#/components/schemas/PlanInviteResponse' }], nullable: true }
+        guestName: { type: string, nullable: true }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/Warning' }
+    PlanInviteRespond:
+      type: object
+      required: [response]
+      properties:
+        response: { $ref: '#/components/schemas/PlanInviteResponse' }
+        guestName: { type: string, minLength: 1, maxLength: 50, description: Tên để chủ biết ai trả lời (tùy chọn) }
 
     # ── support / notifications ──
     TicketStatus:
@@ -2864,7 +2992,7 @@ components:
       required: [id, type, summary, createdAt]
       properties:
         id: { type: string, format: uuid }
-        type: { type: string, enum: [DATE_PLAN_UPDATED, DATE_PLAN_CANCELLED, SUPPORT_REPLIED, SUPPORT_STATUS_CHANGED, ADMIN_ANNOUNCEMENT] }
+        type: { type: string, enum: [DATE_PLAN_UPDATED, DATE_PLAN_CANCELLED, SUPPORT_REPLIED, SUPPORT_STATUS_CHANGED, ADMIN_ANNOUNCEMENT, DATE_PLAN_INVITE_RESPONDED] }
         objectType: { type: string }
         objectId: { type: string, format: uuid }
         summary: { type: string, description: Nội dung tối thiểu; mở đối tượng phải kiểm tra quyền lại }

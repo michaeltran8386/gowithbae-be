@@ -18,6 +18,8 @@ import vn.gowithbae.api.model.DatePlanUpdate;
 import vn.gowithbae.api.model.DatePlanWrite;
 import vn.gowithbae.api.model.DateReminderAction;
 import vn.gowithbae.api.model.DateReminderState;
+import vn.gowithbae.api.model.PlanInviteCreated;
+import vn.gowithbae.api.model.PlanInviteStatus;
 import vn.gowithbae.api.model.ReportVisitRequest;
 
 /** REST delegate cho nhóm API kế hoạch buổi hẹn, lịch .ics và lời nhắc Đi chưa?. */
@@ -27,9 +29,27 @@ public class DatePlansDelegate implements DatePlansApiDelegate {
     private static final MediaType TEXT_CALENDAR_UTF8 = new MediaType("text", "calendar", StandardCharsets.UTF_8);
 
     private final DatePlanService datePlanService;
+    private final PlanInviteService planInviteService;
 
-    public DatePlansDelegate(DatePlanService datePlanService) {
+    public DatePlansDelegate(DatePlanService datePlanService, PlanInviteService planInviteService) {
         this.datePlanService = datePlanService;
+        this.planInviteService = planInviteService;
+    }
+
+    @Override
+    public ResponseEntity<PlanInviteCreated> createDatePlanInvite(UUID planId) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(planInviteService.create(planId));
+    }
+
+    @Override
+    public ResponseEntity<PlanInviteStatus> getDatePlanInvite(UUID planId) {
+        return ResponseEntity.ok(planInviteService.status(planId));
+    }
+
+    @Override
+    public ResponseEntity<Void> revokeDatePlanInvite(UUID planId) {
+        planInviteService.revoke(planId);
+        return ResponseEntity.noContent().build();
     }
 
     @Override

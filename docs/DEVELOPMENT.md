@@ -265,55 +265,74 @@ Contract đổi thì FE chạy `npm run gen:api`. Ghi rõ trong commit/PR operat
 | `RowLevelSecurityTest` fail "Bảng thiếu ENABLE ROW LEVEL SECURITY" | Bảng mới chưa bật RLS | Thêm `ALTER TABLE ... ENABLE ROW LEVEL SECURITY;` vào migration tạo bảng |
 | Migration treo, không báo lỗi | `ALTER`/`LOCK` trên `flyway_schema_history` (Flyway đang giữ lock bảng này) | Không động tới bảng `flyway_schema_history` trong migration |
 
-## 9. Chạy cả hệ thống bằng Docker
+## 9. Chạy cả hệ thống bằng Docker Compose
 
-Bốn container chung một network `gwb-net`:
+File `docker/compose.yaml` dựng 4 container:
 
-| Container | Image | Cổng máy | Việc |
+| Service (container) | Image | Cổng máy | Việc |
 |---|---|---|---|
-| `gwb-db` | `postgres:17-alpine` | 5432 | Database, dữ liệu trong volume `gwb-dbdata` |
-| `gwb-mail` | `axllent/mailpit:v1.27` | 8025 | Hộp thư giả: mọi email OTP xem ở http://localhost:8025 |
-| `gwb-api` | `gowithbae-backend:dev` | 8090 | Backend. Alias `backend` để nginx gọi; ảnh tải lên lưu ở volume `gwb-uploads` |
-| `gwb-web` | `gowithbae-frontend:dev` | 8081 | nginx phục vụ web, chuyển `/api/` sang `backend:8080` |
+| `db` (`gwb-db`) | `postgres:17-alpine` | 5432 | Database, dữ liệu trong volume `gwb-dbdata` |
+| `mail` (`gwb-mail`) | `axllent/mailpit:v1.27` | 8025 | Hộp thư giả: mọi email OTP xem ở http://localhost:8025 |
+| `backend` (`gwb-api`) | build từ repo này | 8090 | API. Ảnh tải lên lưu ở volume `gwb-uploads` |
+| `web` (`gwb-web`) | build từ repo frontend | 8081 | nginx phục vụ web, chuyển `/api/` sang `backend:8080` |
 
-Build image (từ thư mục cha chứa `gowithbae-be` và `web`):
+### 9.1 Lần đầu
 
-```powershell
-docker build -t gowithbae-backend:dev gowithbae-be
-docker build -t gowithbae-frontend:dev web
-```
-
-Tạo lại container API sau khi build (biến bí mật để trong file env riêng, không commit):
+Clone hai repo **cạnh nhau** (`gowithbae-be` và `gowithbae-fe` cùng một thư mục cha), rồi:
 
 ```powershell
-docker rm -f gwb-api
-docker run -d --name gwb-api --network gwb-net --network-alias backend -p 8090:8080 `
-  --env-file gwb-api.env `
-  -e APP_WEB_BASE_URL=http://localhost:8081 -e APP_INVITE_BASE_URL=http://localhost:8081/invite `
-  -v gwb-uploads:/app/.local-data/uploads `
-  gowithbae-backend:dev
+cd gowithbae-be/docker
+copy .env.example .env
 ```
 
-`APP_INVITE_BASE_URL` là tiền tố đầy đủ của link mời cùng chọn (phải kèm `/invite`); `APP_WEB_BASE_URL` chỉ là gốc web, dùng cho link kích hoạt Authenticator.
+Mở `docker/.env`, điền `DB_PASSWORD` và `JWT_SECRET` (`openssl rand -base64 48`). Nếu thư mục frontend không tên `gowithbae-fe` thì đặt `FE_DIR`, ví dụ `FE_DIR=../../web`. File `.env` này không commit.
 
-`gwb-api.env` gồm `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, `SMTP_HOST=gwb-mail`, `SMTP_PORT=1025`, `SMTP_AUTH=false`, `SMTP_STARTTLS=false`, `SMTP_FROM`. Nên đặt thêm `AUTH_MFA_KEY` riêng; nếu bỏ trống, secret TOTP được mã hóa bằng `JWT_SECRET`, và đổi `JWT_SECRET` sẽ làm mọi admin phải kích hoạt lại Authenticator.
+```powershell
+docker compose up -d --build
+```
 
-Web: http://localhost:8081. Trang quản trị: http://localhost:8081/admin.
+- Web: http://localhost:8081, trang quản trị http://localhost:8081/admin.
+- Hộp thư giả: http://localhost:8025. API: http://localhost:8090/api/v1.
+- Lần chạy đầu Flyway tạo schema trong `gwb-dbdata`.
+
+Dữ liệu demo (chạy một lần sau khi backend đã lên):
+
+```powershell
+docker compose exec db psql -U gowithbae -d gowithbae -f /seed/dev-seed.sql
+```
+
+### 9.2 Lệnh thường dùng (chạy trong `gowithbae-be/docker`)
+
+| Việc | Lệnh |
+|---|---|
+| Bật / tắt | `docker compose up -d` / `docker compose down` (giữ dữ liệu) |
+| Sau khi pull code mới | `docker compose up -d --build` |
+| Chỉ build lại backend | `docker compose up -d --build backend` |
+| Xem log | `docker compose logs -f backend` |
+| Trạng thái | `docker compose ps` |
+| Xóa sạch dữ liệu | `docker compose down -v` (**mất DB và ảnh**) |
+
+Đang chạy 4 container cũ tạo bằng `docker run`: xóa container trước (`docker rm -f gwb-db gwb-mail gwb-api gwb-web`), dữ liệu vẫn còn vì compose dùng lại volume `gwb-dbdata`, `gwb-uploads`. Giữ đúng `DB_PASSWORD` và `JWT_SECRET` cũ trong `docker/.env`, nếu không backend không vào được DB và admin phải cài lại Authenticator.
+
+### 9.3 Biến môi trường
+
+- `APP_WEB_BASE_URL` (gốc web, cho link kích hoạt Authenticator) và `APP_INVITE_BASE_URL` (tiền tố link mời, **phải kèm `/invite`**) được compose dựng từ `WEB_URL`, mặc định `http://localhost:8081`.
+- `AUTH_MFA_KEY` (tùy chọn): khóa mã hóa secret TOTP. Để trống thì dẫn xuất từ `JWT_SECRET`, khi đó đổi `JWT_SECRET` sẽ làm mọi admin phải kích hoạt lại. Đặt sau khi đã có admin cũng vậy.
+- `PLACES_VERIFICATION_MAX_AGE_DAYS` (tùy chọn, mặc định 180): ngưỡng "quá hạn xác minh" trên bảng điều khiển.
 
 ## 10. Trang quản trị
 
 ### 10.1 Tạo admin đầu tiên
 
-Chạy image backend một lần với email chủ dự án. Lệnh tạo tài khoản (nếu chưa có), gán `SUPER_ADMIN`, in link kích hoạt rồi thoát:
+Trong `gowithbae-be/docker`, chạy backend một lần với email chủ dự án. Lệnh tạo tài khoản (nếu chưa có), gán `SUPER_ADMIN`, in link kích hoạt rồi thoát:
 
 ```powershell
-docker run --rm --network gwb-net --env-file gwb-api.env -e APP_WEB_BASE_URL=http://localhost:8081 `
-  gowithbae-backend:dev --app.admin.bootstrap-email=owner@example.com
+docker compose run --rm backend --app.admin.bootstrap-email=owner@example.com
 ```
 
-1. Mở link `http://localhost:8081/admin/activate/<token>` in ra cuối log (hết hạn sau 24 giờ, dùng 1 lần).
+1. Mở link `http://localhost:8081/admin/activate/<token>` in ra cuối log (hết hạn sau 24 giờ, dùng 1 lần). Chạy lại lệnh thì có link mới, link cũ mất hiệu lực.
 2. Quét mã QR bằng Google Authenticator (hoặc nhập khóa dạng chữ), nhập mã 6 số để xác nhận.
-3. Vào `/login`: nhập email → mã OTP trong email (Mailpit) → mã 6 số trong Authenticator → vào `/admin`.
+3. Vào `/login`: nhập email → mã OTP trong http://localhost:8025 → mã 6 số **mới** trong Authenticator → vào `/admin`.
 
 Admin sau tạo trong **Tài khoản → Tạo tài khoản**, chọn vai trò Admin: trang hiện link kích hoạt để gửi cho người đó. Mất điện thoại: vào chi tiết tài khoản → **Cấp lại link Authenticator**.
 
@@ -331,7 +350,7 @@ Admin sau tạo trong **Tài khoản → Tạo tài khoản**, chọn vai trò A
 
 ### 10.3 Lưu ý vận hành
 
-- **Không tự duyệt địa điểm do mình tạo** (RULE-21), kể cả `SUPER_ADMIN`. Cần ít nhất hai admin để xuất bản địa điểm.
+- **Tự duyệt địa điểm:** `SUPER_ADMIN` được duyệt nơi do chính mình tạo (OQ-18 đã chốt). Vai trò khác vẫn theo RULE-21 (không tự duyệt).
 - Ảnh địa điểm phục vụ qua `GET /api/v1/files/{id}` và nằm trong volume `gwb-uploads`. Xóa volume là mất ảnh. Production vẫn cần chọn nơi lưu trữ (OQ-21).
 - Lịch sử phiên lưu IP và thiết bị; nội dung trang Quyền riêng tư phải nêu điều này.
 

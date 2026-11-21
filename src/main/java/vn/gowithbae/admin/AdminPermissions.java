@@ -1,6 +1,7 @@
 package vn.gowithbae.admin;
 
 import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
 
 import vn.gowithbae.platform.CurrentUser;
 
@@ -11,7 +12,8 @@ import vn.gowithbae.platform.CurrentUser;
  * <ul>
  * <li>Xem địa điểm/danh mục/bộ sưu tập: EDITOR, REVIEWER, SUPER_ADMIN</li>
  * <li>Biên tập nháp, gửi duyệt, ảnh, CSV, bộ sưu tập: EDITOR, SUPER_ADMIN</li>
- * <li>Duyệt/trả/ẩn/ngừng/khôi phục: REVIEWER, SUPER_ADMIN; không ai tự duyệt nơi mình tạo (RULE-21)</li>
+ * <li>Duyệt/trả/ẩn/ngừng/khôi phục: REVIEWER, SUPER_ADMIN. Tự duyệt nơi mình tạo: chỉ SUPER_ADMIN
+ *     (PO chốt OQ-18 ngày 21/11/2026: dự án do chủ dự án tự vận hành; vai trò khác vẫn giữ RULE-21)</li>
  * <li>Nhãn và khu vực: SUPER_ADMIN</li>
  * <li>SUPPORT: không có quyền ở phần nội dung</li>
  * </ul>
@@ -35,6 +37,16 @@ public class AdminPermissions {
 
     public void requireContentReview() {
         currentUser.requireAnyRole("REVIEWER", "SUPER_ADMIN");
+    }
+
+    /** RULE-21 nới cho SUPER_ADMIN (OQ-18): chủ dự án vận hành một mình vẫn xuất bản được nơi mình tạo. */
+    public boolean mayApproveOwnPlace() {
+        try {
+            currentUser.requireRole("SUPER_ADMIN");
+            return true;
+        } catch (ResponseStatusException e) {
+            return false;
+        }
     }
 
     public void requireTaxonomyAdmin() {
