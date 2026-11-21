@@ -74,7 +74,7 @@ public class DiscoveryDelegate implements DiscoveryApiDelegate {
     @Override
     public ResponseEntity<List<CollectionSummary>> listCollections() {
         var rows = jdbc.sql("""
-                SELECT c.id, c.title, f.storage_key AS cover_key
+                SELECT c.id, c.title, f.id::text AS cover_key
                 FROM collection c LEFT JOIN stored_file f ON f.id = c.cover_file_id
                 WHERE """ + VISIBLE_NOW + """
                 ORDER BY coalesce(c.visible_from, c.created_at) DESC, c.id
@@ -89,7 +89,7 @@ public class DiscoveryDelegate implements DiscoveryApiDelegate {
     public ResponseEntity<CollectionDetail> getCollection(UUID collectionId) {
         // Ngoài khung hiển thị coi như không tồn tại với người dùng.
         CollectionDetail detail = jdbc.sql("""
-                SELECT c.id, c.title, c.body, c.visible_from, c.visible_until, f.storage_key AS cover_key
+                SELECT c.id, c.title, c.body, c.visible_from, c.visible_until, f.id::text AS cover_key
                 FROM collection c LEFT JOIN stored_file f ON f.id = c.cover_file_id
                 WHERE c.id = :id AND """ + VISIBLE_NOW)
                 .param("id", collectionId)

@@ -272,7 +272,7 @@ public class AdminPlaceService {
         audit.log(currentUser.id(), "PLACE_IMAGE_ADD", "place", placeId.toString(), null,
                 Map.of("imageId", imageId.toString(), "fileId", w.getFileId().toString(), "cover", cover), null);
         // shortcut: OQ-21 — chưa cấu hình URL gốc thì url null dù contract yêu cầu; FE quản trị hiển thị ảnh mặc định.
-        return new PlaceImage(imageId, fileUrls.publicUrl(storageKey), sortOrder, cover).caption(blankToNull(w.getCaption()));
+        return new PlaceImage(imageId, fileUrls.publicUrl(w.getFileId().toString()), sortOrder, cover).caption(blankToNull(w.getCaption()));
     }
 
     @Transactional

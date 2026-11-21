@@ -8,7 +8,7 @@ import org.springframework.stereotype.Service;
 /** Chỉ ghi thông báo trong tài khoản; không tự gửi email/push hoặc chọn thêm sự kiện OQ-14. */
 @Service
 public class NotificationService {
-    public enum Type { DATE_PLAN_UPDATED, DATE_PLAN_CANCELLED, SUPPORT_REPLIED, SUPPORT_STATUS_CHANGED }
+    public enum Type { DATE_PLAN_UPDATED, DATE_PLAN_CANCELLED, SUPPORT_REPLIED, SUPPORT_STATUS_CHANGED, ADMIN_ANNOUNCEMENT }
 
     private final JdbcClient jdbc;
 

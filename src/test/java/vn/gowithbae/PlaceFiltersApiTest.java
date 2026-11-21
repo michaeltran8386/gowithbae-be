@@ -1,6 +1,7 @@
 package vn.gowithbae;
 
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.matchesPattern;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -223,7 +224,7 @@ class PlaceFiltersApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items.length()").value(1))
                 .andExpect(jsonPath("$.items[0].distanceKm").doesNotExist())
-                .andExpect(jsonPath("$.items[0].coverUrl").value("https://cdn.test/files/places/cafe.jpg"));
+                .andExpect(jsonPath("$.items[0].coverUrl").value(matchesPattern("https://cdn\\.test/files/[0-9a-f-]{36}")));
     }
 
     @Test
@@ -249,7 +250,7 @@ class PlaceFiltersApiTest {
                 .andExpect(jsonPath("$.area.name").value("Quận 1"))
                 .andExpect(jsonPath("$.price.standardForTwo").value(150000))
                 .andExpect(jsonPath("$.tags.length()").value(4))
-                .andExpect(jsonPath("$.images[0].url").value("https://cdn.test/files/places/cafe.jpg"))
+                .andExpect(jsonPath("$.images[0].url").value(matchesPattern("https://cdn\\.test/files/[0-9a-f-]{36}")))
                 .andExpect(jsonPath("$.images[0].cover").value(true))
                 .andExpect(jsonPath("$.hours.status").value("KNOWN"))
                 .andExpect(jsonPath("$.hours.weekly.length()").value(7))

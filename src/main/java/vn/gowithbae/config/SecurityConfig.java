@@ -48,6 +48,8 @@ public class SecurityConfig {
                 // Công khai: khám phá, tìm, chi tiết, so sánh
                 .requestMatchers(HttpMethod.GET, API + "/collections/**", API + "/taxonomies", API + "/areas",
                         API + "/places/**").permitAll()
+                // Nội dung trang tĩnh và ảnh địa điểm/bộ sưu tập (delegate chỉ phục vụ ảnh đã gắn)
+                .requestMatchers(HttpMethod.GET, API + "/site-content", API + "/files/*").permitAll()
                 // Khách ẩn danh được gửi (có chống lạm dụng trong delegate)
                 .requestMatchers(HttpMethod.POST, API + "/places/*/reports", API + "/events", API + "/uploads").permitAll()
                 .requestMatchers(API + "/auth/otp/**", API + "/share-grants/**").permitAll()
@@ -61,7 +63,8 @@ public class SecurityConfig {
                 // Biên tập/duyệt cần xem danh sách nhãn (kể cả ngừng dùng) để gắn cho địa điểm; chỉ thêm/sửa mới cần SUPER_ADMIN.
                 .requestMatchers(HttpMethod.GET, API + "/admin/taxonomies").hasAnyRole("EDITOR", "REVIEWER", "SUPER_ADMIN")
                 .requestMatchers(API + "/admin/users/**", API + "/admin/audit-logs", API + "/admin/reports/**",
-                        API + "/admin/taxonomies/**", API + "/admin/areas/**").hasRole("SUPER_ADMIN")
+                        API + "/admin/taxonomies/**", API + "/admin/areas/**", API + "/admin/site-content",
+                        API + "/admin/notifications/**").hasRole("SUPER_ADMIN")
                 .requestMatchers(API + "/admin/places/**", API + "/admin/collections/**", API + "/admin/imports/**")
                         .hasAnyRole("EDITOR", "REVIEWER", "SUPER_ADMIN")
                 .requestMatchers(API + "/admin/place-reports/**").hasAnyRole("REVIEWER", "EDITOR", "SUPER_ADMIN")

@@ -46,7 +46,7 @@ public class PlaceReader {
     public static final String CARD_COLUMNS = """
             p.id, p.name, p.lat, p.lng, a.name AS area_name,
             coalesce(pp.status, 'UNKNOWN') AS price_status, pp.standard_for_two, pp.min_price, pp.max_price,
-            pp.includes, pp.verified_at AS price_verified_at, cover_file.storage_key AS cover_key
+            pp.includes, pp.verified_at AS price_verified_at, cover_file.id::text AS cover_key
             """;
 
     /** Alias: p = place, pp = place_price, a = area, cover = ảnh bìa, cover_file = tệp ảnh bìa. */
@@ -201,14 +201,14 @@ public class PlaceReader {
     /** shortcut: OQ-21 chưa có nơi lưu tệp; khi chưa cấu hình URL gốc thì bỏ ảnh vì {@code url} bắt buộc trong contract. */
     private void attachImages(Map<UUID, PlaceDetail> byId) {
         jdbc.sql("""
-                SELECT i.place_id, i.id, i.caption, i.sort_order, i.is_cover, f.storage_key
+                SELECT i.place_id, i.id, i.caption, i.sort_order, i.is_cover, f.id::text AS file_key
                 FROM place_image i JOIN stored_file f ON f.id = i.file_id
                 WHERE i.place_id IN (:ids)
                 ORDER BY i.is_cover DESC, i.sort_order, i.id
                 """)
                 .param("ids", byId.keySet())
                 .query(rs -> {
-                    var url = fileUrls.publicUrl(rs.getString("storage_key"));
+                    var url = fileUrls.publicUrl(rs.getString("file_key"));
                     if (url == null) {
                         return;
                     }

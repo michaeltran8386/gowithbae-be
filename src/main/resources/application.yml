@@ -41,7 +41,8 @@ app:
   auth:
     mfa-key: ${AUTH_MFA_KEY:${app.jwt.secret}}
   files:
-    # URL gốc để ghép với stored_file.storage_key (OQ-21 chưa có URL công khai). Để trống = API trả coverUrl/url null.
+    # URL gốc ghép với id tệp cho ảnh địa điểm/bộ sưu tập. Để trống = /api/v1/files/ (backend tự phục vụ ảnh đã gắn).
+    # Đặt khi chuyển sang CDN/lưu trữ ngoài phục vụ theo id (OQ-21).
     public-base-url: ${FILES_PUBLIC_BASE_URL:}
 
 management:

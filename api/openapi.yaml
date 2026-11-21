@@ -43,12 +43,18 @@ tags:
     description: Tải tệp (RULE-27)
   - name: Events
     description: Sự kiện phân tích (FR-32)
+  - name: Files
+    description: Ảnh công khai của địa điểm và bộ sưu tập
+  - name: SiteContent
+    description: Nội dung trang tĩnh (trang chủ, banner, FAQ, điều khoản, liên hệ)
   - name: AdminPlaces
     description: Biên tập, duyệt, ẩn địa điểm (FR-23, FR-24)
   - name: AdminTaxonomy
     description: Loại hình, nhãn, khu vực (FR-25)
   - name: AdminCollections
     description: Bộ sưu tập (FR-26)
+  - name: AdminContent
+    description: Sửa nội dung trang tĩnh và gửi thông báo cho người dùng
   - name: AdminUsers
     description: Tài khoản và vai trò (FR-27)
   - name: AdminPlaceReports
@@ -350,6 +356,39 @@ paths:
         '204': { description: No Content }
         '400': { $ref: '#/components/responses/BadRequest' }
         '410': { $ref: '#/components/responses/Gone' }
+
+  /files/{fileId}:
+    get:
+      tags: [Files]
+      operationId: getPublicFile
+      summary: Ảnh địa điểm (đã gắn vào địa điểm) hoặc ảnh bìa bộ sưu tập; tệp khác trả 404
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: Nội dung ảnh
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/png:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /site-content:
+    get:
+      tags: [SiteContent]
+      operationId: getSiteContent
+      summary: Nội dung trang tĩnh hiện hành, công khai
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SiteContent' }
 
   # ───────────────────────── Me ─────────────────────────
   /me:
@@ -1596,6 +1635,73 @@ paths:
               schema: { $ref: '#/components/schemas/AdminUserActivity' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /admin/site-content:
+    get:
+      tags: [AdminContent]
+      operationId: adminGetSiteContent
+      security: [{ bearerAuth: [] }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminSiteContent' }
+    put:
+      tags: [AdminContent]
+      operationId: adminUpdateSiteContent
+      summary: Thay toàn bộ nội dung trang tĩnh; ghi audit các mục thay đổi
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SiteContent' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminSiteContent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /admin/notifications:
+    post:
+      tags: [AdminContent]
+      operationId: adminSendNotification
+      summary: Gửi thông báo vào hộp thư trong app cho một người hoặc mọi tài khoản đang hoạt động
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminNotificationRequest' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminNotificationSent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/notifications/sent:
+    get:
+      tags: [AdminContent]
+      operationId: adminListSentNotifications
+      summary: Lịch sử thông báo đã gửi (mới nhất trước)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminNotificationSentPage' }
+
   # ───────────────────────── Admin: place reports ─────────────────────────
   /admin/place-reports:
     get:
@@ -2419,6 +2525,87 @@ components:
         objectId: { type: string, nullable: true }
         platform: { type: string, nullable: true }
 
+    SiteContent:
+      type: object
+      required: [homeHero, homeBanner, faq, terms, privacy, contact, footer]
+      properties:
+        homeHero:
+          type: object
+          required: [title, subtitle]
+          properties:
+            title: { type: string, maxLength: 120 }
+            subtitle: { type: string, maxLength: 300 }
+        homeBanner:
+          type: object
+          required: [enabled, text]
+          properties:
+            enabled: { type: boolean }
+            text: { type: string, maxLength: 200 }
+            linkUrl: { type: string, maxLength: 500, nullable: true }
+        faq:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required: [question, answer]
+            properties:
+              question: { type: string, maxLength: 200 }
+              answer: { type: string, maxLength: 2000 }
+        terms:
+          type: object
+          required: [body]
+          properties:
+            body: { type: string, maxLength: 20000, description: 'Văn bản thường; dòng trống tách đoạn' }
+        privacy:
+          type: object
+          required: [body]
+          properties:
+            body: { type: string, maxLength: 20000 }
+        contact:
+          type: object
+          properties:
+            email: { type: string, maxLength: 200, nullable: true }
+            phone: { type: string, maxLength: 30, nullable: true }
+            address: { type: string, maxLength: 300, nullable: true }
+            facebook: { type: string, maxLength: 300, nullable: true }
+        footer:
+          type: object
+          required: [text]
+          properties:
+            text: { type: string, maxLength: 300 }
+    AdminSiteContent:
+      allOf:
+        - $ref: '#/components/schemas/SiteContent'
+        - type: object
+          properties:
+            updatedAt: { type: string, format: date-time, nullable: true }
+            updatedBy: { type: string, format: uuid, nullable: true }
+    AdminNotificationRequest:
+      type: object
+      required: [summary, target]
+      properties:
+        summary: { type: string, minLength: 1, maxLength: 500 }
+        target: { type: string, enum: [ALL, USER] }
+        userId: { type: string, format: uuid, description: Bắt buộc khi target = USER }
+    AdminNotificationSent:
+      type: object
+      required: [summary, target, recipients, sentAt]
+      properties:
+        summary: { type: string }
+        target: { type: string, enum: [ALL, USER] }
+        userId: { type: string, format: uuid, nullable: true }
+        recipients: { type: integer, format: int64 }
+        sentAt: { type: string, format: date-time }
+        sentBy: { type: string, format: uuid, nullable: true }
+    AdminNotificationSentPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AdminNotificationSent' }
+        page: { $ref: '#/components/schemas/PageMeta' }
+
     # ── saved lists ──
     SavedListWrite:
       type: object
@@ -2677,7 +2864,7 @@ components:
       required: [id, type, summary, createdAt]
       properties:
         id: { type: string, format: uuid }
-        type: { type: string, enum: [DATE_PLAN_UPDATED, DATE_PLAN_CANCELLED, SUPPORT_REPLIED, SUPPORT_STATUS_CHANGED] }
+        type: { type: string, enum: [DATE_PLAN_UPDATED, DATE_PLAN_CANCELLED, SUPPORT_REPLIED, SUPPORT_STATUS_CHANGED, ADMIN_ANNOUNCEMENT] }
         objectType: { type: string }
         objectId: { type: string, format: uuid }
         summary: { type: string, description: Nội dung tối thiểu; mở đối tượng phải kiểm tra quyền lại }

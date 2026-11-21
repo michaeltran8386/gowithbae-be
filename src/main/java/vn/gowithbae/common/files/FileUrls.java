@@ -6,9 +6,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
- * Đổi {@code stored_file.storage_key} thành URL công khai.
- * shortcut: OQ-21/OQ-22 chưa chọn nơi lưu tệp; tạm ghép {@code app.files.public-base-url} + key.
- * Thống nhất lại với phần Uploads khi chọn dịch vụ lưu trữ.
+ * URL công khai của ảnh địa điểm / ảnh bìa bộ sưu tập, dựng từ id tệp.
+ * Mặc định trỏ tới {@code GET /api/v1/files/{id}} (PublicFilesController) — đường dẫn tương đối, đi qua cùng
+ * origin với web. Khi chuyển sang CDN/lưu trữ ngoài (OQ-21), đặt {@code app.files.public-base-url} trỏ tới nơi
+ * phục vụ ảnh theo id.
  */
 @Component
 public class FileUrls {
@@ -16,14 +17,15 @@ public class FileUrls {
     private final String baseUrl;
 
     public FileUrls(@Value("${app.files.public-base-url:}") String baseUrl) {
-        this.baseUrl = baseUrl.endsWith("/") || baseUrl.isEmpty() ? baseUrl : baseUrl + "/";
+        String base = baseUrl == null || baseUrl.isBlank() ? "/api/v1/files/" : baseUrl.trim();
+        this.baseUrl = base.endsWith("/") ? base : base + "/";
     }
 
-    /** {@code null} khi không có tệp hoặc chưa cấu hình nơi lưu (FE hiển thị ảnh mặc định). */
-    public URI publicUrl(String storageKey) {
-        if (storageKey == null || baseUrl.isEmpty()) {
+    /** {@code null} khi không có tệp (FE hiển thị ảnh mặc định). */
+    public URI publicUrl(String fileId) {
+        if (fileId == null || fileId.isBlank()) {
             return null;
         }
-        return URI.create(baseUrl + storageKey);
+        return URI.create(baseUrl + fileId);
     }
 }
