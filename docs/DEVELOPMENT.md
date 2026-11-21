@@ -265,6 +265,76 @@ Contract đổi thì FE chạy `npm run gen:api`. Ghi rõ trong commit/PR operat
 | `RowLevelSecurityTest` fail "Bảng thiếu ENABLE ROW LEVEL SECURITY" | Bảng mới chưa bật RLS | Thêm `ALTER TABLE ... ENABLE ROW LEVEL SECURITY;` vào migration tạo bảng |
 | Migration treo, không báo lỗi | `ALTER`/`LOCK` trên `flyway_schema_history` (Flyway đang giữ lock bảng này) | Không động tới bảng `flyway_schema_history` trong migration |
 
+## 9. Chạy cả hệ thống bằng Docker
+
+Bốn container chung một network `gwb-net`:
+
+| Container | Image | Cổng máy | Việc |
+|---|---|---|---|
+| `gwb-db` | `postgres:17-alpine` | 5432 | Database, dữ liệu trong volume `gwb-dbdata` |
+| `gwb-mail` | `axllent/mailpit:v1.27` | 8025 | Hộp thư giả: mọi email OTP xem ở http://localhost:8025 |
+| `gwb-api` | `gowithbae-backend:dev` | 8090 | Backend. Alias `backend` để nginx gọi; ảnh tải lên lưu ở volume `gwb-uploads` |
+| `gwb-web` | `gowithbae-frontend:dev` | 8081 | nginx phục vụ web, chuyển `/api/` sang `backend:8080` |
+
+Build image (từ thư mục cha chứa `gowithbae-be` và `web`):
+
+```powershell
+docker build -t gowithbae-backend:dev gowithbae-be
+docker build -t gowithbae-frontend:dev web
+```
+
+Tạo lại container API sau khi build (biến bí mật để trong file env riêng, không commit):
+
+```powershell
+docker rm -f gwb-api
+docker run -d --name gwb-api --network gwb-net --network-alias backend -p 8090:8080 `
+  --env-file gwb-api.env `
+  -e APP_WEB_BASE_URL=http://localhost:8081 -e APP_INVITE_BASE_URL=http://localhost:8081/invite `
+  -v gwb-uploads:/app/.local-data/uploads `
+  gowithbae-backend:dev
+```
+
+`APP_INVITE_BASE_URL` là tiền tố đầy đủ của link mời cùng chọn (phải kèm `/invite`); `APP_WEB_BASE_URL` chỉ là gốc web, dùng cho link kích hoạt Authenticator.
+
+`gwb-api.env` gồm `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, `SMTP_HOST=gwb-mail`, `SMTP_PORT=1025`, `SMTP_AUTH=false`, `SMTP_STARTTLS=false`, `SMTP_FROM`. Nên đặt thêm `AUTH_MFA_KEY` riêng; nếu bỏ trống, secret TOTP được mã hóa bằng `JWT_SECRET`, và đổi `JWT_SECRET` sẽ làm mọi admin phải kích hoạt lại Authenticator.
+
+Web: http://localhost:8081. Trang quản trị: http://localhost:8081/admin.
+
+## 10. Trang quản trị
+
+### 10.1 Tạo admin đầu tiên
+
+Chạy image backend một lần với email chủ dự án. Lệnh tạo tài khoản (nếu chưa có), gán `SUPER_ADMIN`, in link kích hoạt rồi thoát:
+
+```powershell
+docker run --rm --network gwb-net --env-file gwb-api.env -e APP_WEB_BASE_URL=http://localhost:8081 `
+  gowithbae-backend:dev --app.admin.bootstrap-email=owner@example.com
+```
+
+1. Mở link `http://localhost:8081/admin/activate/<token>` in ra cuối log (hết hạn sau 24 giờ, dùng 1 lần).
+2. Quét mã QR bằng Google Authenticator (hoặc nhập khóa dạng chữ), nhập mã 6 số để xác nhận.
+3. Vào `/login`: nhập email → mã OTP trong email (Mailpit) → mã 6 số trong Authenticator → vào `/admin`.
+
+Admin sau tạo trong **Tài khoản → Tạo tài khoản**, chọn vai trò Admin: trang hiện link kích hoạt để gửi cho người đó. Mất điện thoại: vào chi tiết tài khoản → **Cấp lại link Authenticator**.
+
+### 10.2 Màn hình
+
+| Nhóm | Màn |
+|---|---|
+| Tổng quan | Số liệu chính, xuất CSV, địa điểm chờ duyệt, báo sai và yêu cầu hỗ trợ mới |
+| Người dùng | Tìm/lọc, tạo tài khoản, khóa/mở (bắt buộc lý do), đổi vai trò, đăng xuất mọi thiết bị; chi tiết: hoạt động, phiên đăng nhập (IP, thiết bị), nhật ký |
+| Địa điểm | Danh sách, tạo/sửa (nhãn, giá, giờ, nguồn), ảnh, gửi duyệt/duyệt/ẩn/ngừng/khôi phục; nhập CSV |
+| Danh mục | Nhãn và khu vực (thêm, đổi tên, ngừng dùng); bộ sưu tập |
+| Nội dung web | Trang chủ, banner, FAQ, điều khoản, quyền riêng tư, liên hệ, chân trang; gửi thông báo |
+| Hỗ trợ | Báo sai (đóng phải có ghi chú), yêu cầu hỗ trợ (trả lời công khai / ghi chú nội bộ) |
+| Hệ thống | Nhật ký thao tác quản trị |
+
+### 10.3 Lưu ý vận hành
+
+- **Không tự duyệt địa điểm do mình tạo** (RULE-21), kể cả `SUPER_ADMIN`. Cần ít nhất hai admin để xuất bản địa điểm.
+- Ảnh địa điểm phục vụ qua `GET /api/v1/files/{id}` và nằm trong volume `gwb-uploads`. Xóa volume là mất ảnh. Production vẫn cần chọn nơi lưu trữ (OQ-21).
+- Lịch sử phiên lưu IP và thiết bị; nội dung trang Quyền riêng tư phải nêu điều này.
+
 ## CR-001: endpoint, database và nghiệm thu
 
 Nguồn hiện hành: SRS hợp nhất v1.3 (Requirements v1.1), §4/7/13/17. Ba hành vi đã CONF không hỏi lại; actor xác nhận, sửa lượt và nhắc lại sau đổi giờ còn OQ-10/25.
