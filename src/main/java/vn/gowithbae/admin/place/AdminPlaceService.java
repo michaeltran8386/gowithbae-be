@@ -34,6 +34,7 @@ import vn.gowithbae.api.model.PlaceStatus;
 import vn.gowithbae.api.model.TimeRange;
 import vn.gowithbae.platform.AuditService;
 import vn.gowithbae.common.files.FileUrls;
+import vn.gowithbae.admin.AdminPermissions;
 import vn.gowithbae.platform.CurrentUser;
 import vn.gowithbae.common.web.Problems;
 import vn.gowithbae.place.PlaceReader;
@@ -71,10 +72,12 @@ public class AdminPlaceService {
     private final AuditService audit;
     private final FileUrls fileUrls;
     private final CurrentUser currentUser;
+    private final AdminPermissions permissions;
 
     public AdminPlaceService(JdbcClient jdbc, PlaceReader reader, SearchTextUpdater searchText, AuditService audit,
-            FileUrls fileUrls, CurrentUser currentUser) {
+            FileUrls fileUrls, CurrentUser currentUser, AdminPermissions permissions) {
         this.currentUser = currentUser;
+        this.permissions = permissions;
         this.jdbc = jdbc;
         this.reader = reader;
         this.searchText = searchText;
@@ -188,7 +191,7 @@ public class AdminPlaceService {
 
     /**
      * Quyền theo vai trò đã kiểm tra ở delegate. Ở đây: trạng thái nguồn, lý do bắt buộc, điều kiện xuất bản,
-     * không tự duyệt nơi mình tạo (RULE-21; vai trò kép OQ-18 — mặc định cấm cả SUPER_ADMIN).
+     * không tự duyệt nơi mình tạo (RULE-21), trừ SUPER_ADMIN (OQ-18 đã chốt; xem AdminPermissions).
      */
     @Transactional
     public AdminPlace transition(UUID id, ActionEnum action, String reason) {
@@ -208,7 +211,7 @@ public class AdminPlaceService {
             throw Problems.badRequest("Cần ghi lý do", List.of(Problems.fieldError("reason", "Bắt buộc với " + action.getValue())));
         }
         UUID actor = currentUser.id();
-        if (action == ActionEnum.APPROVE && actor.toString().equals(row[1])) {
+        if (action == ActionEnum.APPROVE && actor.toString().equals(row[1]) && !permissions.mayApproveOwnPlace()) {
             throw Problems.forbidden("Không được tự duyệt địa điểm do chính mình tạo");
         }
         if (t.checksBlockers()) {
