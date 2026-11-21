@@ -7,13 +7,14 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.util.UUID;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-/** Private local storage; never configure this directory as a static resource. */
+/** Private local storage; never configure this directory as a static resource. Mặc định khi không đặt app.files.storage. */
 @Component
-public class LocalFileStorage {
+@ConditionalOnProperty(name = "app.files.storage", havingValue = "local", matchIfMissing = true)
+public class LocalFileStorage implements FileStorage {
     private final Path root;
 
     public LocalFileStorage(@Value("${app.files.root:.local-data/uploads}") String root) {
@@ -21,17 +22,14 @@ public class LocalFileStorage {
     }
 
     private Path path(String key) throws IOException {
-        try {
-            if (!UUID.fromString(key).toString().equals(key)) throw new IllegalArgumentException();
-        } catch (IllegalArgumentException ex) {
-            throw new IOException("Invalid storage key");
-        }
+        FileStorage.requireValidKey(key);
         for (Path parent = root; parent != null; parent = parent.getParent()) {
             if (Files.isSymbolicLink(parent)) throw new IOException("Invalid storage root");
         }
         return root.resolve(key);
     }
 
+    @Override
     public void write(String key, byte[] bytes) throws IOException {
         Files.createDirectories(root);
         Path target = path(key);
@@ -50,10 +48,12 @@ public class LocalFileStorage {
         }
     }
 
+    @Override
     public InputStream open(String key) throws IOException {
         return Files.newInputStream(path(key), LinkOption.NOFOLLOW_LINKS);
     }
 
+    @Override
     public void delete(String key) throws IOException {
         Files.deleteIfExists(path(key));
     }

@@ -14,7 +14,7 @@ import org.springframework.stereotype.Service;
 
 import vn.gowithbae.api.FilesApiDelegate;
 import vn.gowithbae.common.web.Problems;
-import vn.gowithbae.upload.LocalFileStorage;
+import vn.gowithbae.upload.FileStorage;
 
 /**
  * Ảnh công khai: chỉ tệp PLACE_IMAGE đã gắn vào một địa điểm, hoặc tệp COLLECTION đang là ảnh bìa bộ sưu tập.
@@ -26,9 +26,9 @@ import vn.gowithbae.upload.LocalFileStorage;
 public class PublicFilesDelegate implements FilesApiDelegate {
 
     private final JdbcClient jdbc;
-    private final LocalFileStorage storage;
+    private final FileStorage storage;
 
-    public PublicFilesDelegate(JdbcClient jdbc, LocalFileStorage storage) {
+    public PublicFilesDelegate(JdbcClient jdbc, FileStorage storage) {
         this.jdbc = jdbc;
         this.storage = storage;
     }
