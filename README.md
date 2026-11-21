@@ -28,7 +28,7 @@ Backend GoWithBae G1: Spring Boot 4.1 · Java 21 · PostgreSQL (Supabase) · Fly
 
 Không có Supabase? `./mvnw spring-boot:test-run` chạy với Postgres trong Docker (Testcontainers).
 
-Chạy cả hệ thống (DB, hộp thư giả, API, web) bằng Docker và tạo admin đầu tiên: [DEVELOPMENT.md §9–10](docs/DEVELOPMENT.md#9-chạy-cả-hệ-thống-bằng-docker).
+Chạy cả hệ thống (DB, hộp thư giả, API, web): `cd docker && copy .env.example .env` (điền secret) → `docker compose up -d --build`. Chi tiết và cách tạo admin đầu tiên: [DEVELOPMENT.md §9–10](docs/DEVELOPMENT.md#9-chạy-cả-hệ-thống-bằng-docker-compose).
 
 ## Test
 
@@ -44,6 +44,7 @@ src/main/java/vn/gowithbae/
   place/ discovery/ content/ admin/{place,imports,taxonomy,collection}/ phần B
   choice/ plan/ support/ report/                                        phần C
 src/main/resources/db/migration  V1–V4, V100+, V200, V300, V400+ (xem mục Đã có)
+docker/compose.yaml              chạy cả hệ thống (db, mail, backend, web)
 docs/FLOWS.md                    luồng chức năng
 docs/DEVELOPMENT.md              cài đặt, Docker, quản trị, quy trình làm endpoint
 ```
@@ -61,4 +62,4 @@ docs/DEVELOPMENT.md              cài đặt, Docker, quản trị, quy trình l
 
 Migration: V1–V4 nền, V100/V101 (A), V200 (B), V300 (C, đã chạy trên Supabase nhóm — **không sửa**), V400–V402 (quản trị). Migration mới phải đánh số > V402.
 
-Chưa có / đang chờ: chia sẻ kế hoạch tạo tay; lưu ảnh production (OQ-21, hiện lưu trên đĩa); RULE-21 khi chỉ có một admin (OQ-18); ngưỡng quá hạn xác minh (OQ-20); SMTP thật, backup, chính sách giữ dữ liệu. Không gọi đây là bản phát hành production.
+Chưa có / đang chờ: chia sẻ kế hoạch tạo tay; lưu ảnh production (OQ-21, hiện lưu trên đĩa); ngưỡng quá hạn xác minh (OQ-20); SMTP thật, backup, chính sách giữ dữ liệu. Không gọi đây là bản phát hành production.

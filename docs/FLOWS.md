@@ -126,7 +126,7 @@ DRAFT --SUBMIT--> PENDING --APPROVE--> PUBLISHED --HIDE--------> HIDDEN   --REST
 ```
 
 - **SUBMIT/APPROVE chỉ qua khi đủ điều kiện (RULE-20)**: mô tả, loại hình và khu vực còn dùng, ảnh có nguồn/quyền + ảnh bìa, hoạt động chính, trạng thái giá (đã biết hoặc ghi rõ chưa rõ), nguồn + ngày kiểm tra, không trùng chi nhánh. `GET /admin/places/{id}` trả `publishBlockers[]` để giao diện liệt kê.
-- **Không tự duyệt nơi mình tạo (RULE-21)**, kể cả `SUPER_ADMIN` → 403. Muốn xuất bản cần ít nhất 2 admin. (OQ-18: PO có thể đổi.)
+- **Tự duyệt (RULE-21, OQ-18 đã chốt 21/11/2026):** `SUPER_ADMIN` được duyệt nơi do chính mình tạo, vì chủ dự án vận hành một mình. Vai trò khác (REVIEWER kiêm EDITOR) vẫn bị chặn → 403. Nhật ký vẫn ghi người duyệt.
 - HIDE/DEACTIVATE/RETURN bắt buộc lý do. Mọi thao tác ghi `audit_log`.
 
 ### 4.2 Nhập CSV (B)
@@ -172,13 +172,19 @@ Tối đa 2 MB, 1000 dòng. Nhãn nhiều mã cách nhau bằng `;`. Giá `KNOWN
 - `GET /admin/place-reports[/{id}]`, `POST .../transitions {status, note?}`: `NEW → CHECKING → RESOLVED | INSUFFICIENT` (đóng bắt buộc ghi chú); đã đóng chỉ mở lại về `CHECKING`.
 - `GET /admin/support-tickets[/{id}]`, `POST .../messages {body, visibility: PUBLIC | INTERNAL}`, `POST .../transitions {status}`. Trả lời `PUBLIC` gửi thông báo cho thành viên và chuyển `NEW → IN_PROGRESS`; `INTERNAL` không bao giờ lộ cho thành viên.
 
-## 5. Thử nhanh bằng Docker
+## 5. Thử nhanh bằng Docker Compose
 
-Xem DEVELOPMENT.md §9–10. Tóm tắt: build 2 image → chạy `gwb-db`, `gwb-mail`, `gwb-api`, `gwb-web` → web http://localhost:8081, hộp thư giả http://localhost:8025 (mã OTP), tạo admin đầu tiên bằng lệnh bootstrap.
+```powershell
+cd gowithbae-be/docker
+copy .env.example .env      # điền DB_PASSWORD, JWT_SECRET
+docker compose up -d --build
+docker compose run --rm backend --app.admin.bootstrap-email=<email-của-bạn>
+```
+
+Web http://localhost:8081, hộp thư giả (mã OTP) http://localhost:8025. Chi tiết: DEVELOPMENT.md §9–10.
 
 ## 6. Còn thiếu / đang chờ quyết định
 
-- RULE-21 với một admin duy nhất (OQ-18): giữ "cần 2 admin" hay cho `SUPER_ADMIN` tự duyệt.
 - Chia sẻ kế hoạch tạo tay (không qua cùng chọn): chưa có API.
 - Lưu ảnh production (OQ-21): đang lưu trên đĩa container (`gwb-uploads`).
 - Ngưỡng quá hạn xác minh (OQ-20), SMTP thật, backup và chính sách giữ dữ liệu: chưa chốt.
