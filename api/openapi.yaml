@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: GoWithBae G1 API
-  version: 0.3.0
+  version: 0.4.0
   description: |
     API contract cho GoWithBae G1 (web khách hàng + quản trị nội bộ).
     Nguồn yêu cầu: `GWB-REQ-G1` v1.1 (15-11-2026), SRS hợp nhất v1.2 và CR-001.
@@ -43,12 +43,18 @@ tags:
     description: Tải tệp (RULE-27)
   - name: Events
     description: Sự kiện phân tích (FR-32)
+  - name: Files
+    description: Ảnh công khai của địa điểm và bộ sưu tập
+  - name: SiteContent
+    description: Nội dung trang tĩnh (trang chủ, banner, FAQ, điều khoản, liên hệ)
   - name: AdminPlaces
     description: Biên tập, duyệt, ẩn địa điểm (FR-23, FR-24)
   - name: AdminTaxonomy
     description: Loại hình, nhãn, khu vực (FR-25)
   - name: AdminCollections
     description: Bộ sưu tập (FR-26)
+  - name: AdminContent
+    description: Sửa nội dung trang tĩnh và gửi thông báo cho người dùng
   - name: AdminUsers
     description: Tài khoản và vai trò (FR-27)
   - name: AdminPlaceReports
@@ -316,6 +322,73 @@ paths:
       responses:
         default: { $ref: '#/components/responses/StandardError' }
         '204': { description: No Content }
+
+  /auth/mfa-activation/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema: { type: string, minLength: 32, maxLength: 128 }
+    get:
+      tags: [Auth]
+      operationId: getMfaActivation
+      summary: Xem link kích hoạt TOTP cho tài khoản quản trị (dùng 1 lần, hết hạn 24 giờ)
+      description: 'Trả otpauth URI để quét bằng ứng dụng Authenticator. Link chỉ do SUPER_ADMIN hoặc lệnh bootstrap tạo; không có endpoint tự cấp MFA từ phiên email.'
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MfaActivationPreview' }
+        '410': { $ref: '#/components/responses/Gone' }
+    post:
+      tags: [Auth]
+      operationId: completeMfaActivation
+      summary: Xác nhận mã 6 số đầu tiên để bật TOTP; thu hồi phiên cũ của tài khoản
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MfaActivationConfirm' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '204': { description: No Content }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '410': { $ref: '#/components/responses/Gone' }
+
+  /files/{fileId}:
+    get:
+      tags: [Files]
+      operationId: getPublicFile
+      summary: Ảnh địa điểm (đã gắn vào địa điểm) hoặc ảnh bìa bộ sưu tập; tệp khác trả 404
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: Nội dung ảnh
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/png:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /site-content:
+    get:
+      tags: [SiteContent]
+      operationId: getSiteContent
+      summary: Nội dung trang tĩnh hiện hành, công khai
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SiteContent' }
 
   # ───────────────────────── Me ─────────────────────────
   /me:
@@ -1400,6 +1473,26 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AdminUserPage' }
         '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [AdminUsers]
+      operationId: adminCreateUser
+      summary: Tạo tài khoản với vai trò chỉ định; tài khoản quản trị nhận link kích hoạt TOTP
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminCreateUserRequest' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUserCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /admin/users/{userId}/lock:
     post:
       tags: [AdminUsers]
@@ -1465,6 +1558,149 @@ paths:
               schema: { $ref: '#/components/schemas/AdminUser' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
+
+  /admin/users/{userId}:
+    get:
+      tags: [AdminUsers]
+      operationId: adminGetUser
+      summary: Chi tiết tài khoản, trạng thái TOTP, lần đăng nhập và hoạt động cuối
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUserDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/users/{userId}/mfa-activation:
+    post:
+      tags: [AdminUsers]
+      operationId: adminIssueMfaActivation
+      summary: Cấp (lại) link kích hoạt TOTP cho tài khoản quản trị; link cũ chưa dùng bị hủy
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MfaActivationLink' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/users/{userId}/sessions:
+    get:
+      tags: [AdminUsers]
+      operationId: adminListUserSessions
+      summary: Lịch sử phiên đăng nhập (thời điểm, IP, thiết bị, hoạt động cuối)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminSessionPage' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/users/{userId}/sessions/revoke:
+    post:
+      tags: [AdminUsers]
+      operationId: adminRevokeUserSessions
+      summary: Đăng xuất tài khoản khỏi mọi thiết bị (không khóa tài khoản)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '204': { description: No Content }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/users/{userId}/activity:
+    get:
+      tags: [AdminUsers]
+      operationId: adminGetUserActivity
+      summary: Tổng hợp hoạt động và sự kiện gần đây của một tài khoản (không gồm nội dung riêng tư)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUserActivity' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/site-content:
+    get:
+      tags: [AdminContent]
+      operationId: adminGetSiteContent
+      security: [{ bearerAuth: [] }]
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminSiteContent' }
+    put:
+      tags: [AdminContent]
+      operationId: adminUpdateSiteContent
+      summary: Thay toàn bộ nội dung trang tĩnh; ghi audit các mục thay đổi
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SiteContent' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminSiteContent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /admin/notifications:
+    post:
+      tags: [AdminContent]
+      operationId: adminSendNotification
+      summary: Gửi thông báo vào hộp thư trong app cho một người hoặc mọi tài khoản đang hoạt động
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminNotificationRequest' }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminNotificationSent' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /admin/notifications/sent:
+    get:
+      tags: [AdminContent]
+      operationId: adminListSentNotifications
+      summary: Lịch sử thông báo đã gửi (mới nhất trước)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminNotificationSentPage' }
 
   # ───────────────────────── Admin: place reports ─────────────────────────
   /admin/place-reports:
@@ -2198,6 +2434,178 @@ components:
           items: { $ref: '#/components/schemas/AdminUser' }
         page: { $ref: '#/components/schemas/PageMeta' }
 
+    AdminCreateUserRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        displayName: { type: string, maxLength: 100 }
+        roles:
+          type: array
+          description: Mặc định [MEMBER]
+          uniqueItems: true
+          items: { $ref: '#/components/schemas/Role' }
+    AdminUserCreated:
+      type: object
+      required: [user]
+      properties:
+        user: { $ref: '#/components/schemas/AdminUser' }
+        activation: { $ref: '#/components/schemas/MfaActivationLink' }
+    MfaActivationLink:
+      type: object
+      required: [activationUrl, expiresAt]
+      properties:
+        activationUrl: { type: string }
+        expiresAt: { type: string, format: date-time }
+    MfaActivationConfirm:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, pattern: '^[0-9]{6}$' }
+    MfaActivationPreview:
+      type: object
+      required: [email, otpauthUri, secret, expiresAt]
+      properties:
+        email: { type: string }
+        otpauthUri: { type: string }
+        secret: { type: string, description: 'Base32, để nhập tay khi không quét được QR' }
+        expiresAt: { type: string, format: date-time }
+    AdminUserDetail:
+      allOf:
+        - $ref: '#/components/schemas/AdminUser'
+        - type: object
+          properties:
+            mfaEnrolled: { type: boolean }
+            lastLoginAt: { type: string, format: date-time, nullable: true }
+            lastSeenAt: { type: string, format: date-time, nullable: true }
+            activeSessions: { type: integer }
+    AdminSession:
+      type: object
+      required: [id, createdAt, expiresAt, active]
+      properties:
+        id: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        revokedAt: { type: string, format: date-time, nullable: true }
+        lastSeenAt: { type: string, format: date-time, nullable: true }
+        ipAddress: { type: string, nullable: true }
+        userAgent: { type: string, nullable: true }
+        active: { type: boolean }
+    AdminSessionPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AdminSession' }
+        page: { $ref: '#/components/schemas/PageMeta' }
+    AdminUserActivity:
+      type: object
+      required: [savedLists, savedPlaces, choiceSessionsCreated, choiceSessionsFinalized, plansScheduled, plansCancelled, plansPast, visitsConfirmed, supportTickets, placeReports, recentEvents]
+      properties:
+        savedLists: { type: integer, format: int64 }
+        savedPlaces: { type: integer, format: int64 }
+        choiceSessionsCreated: { type: integer, format: int64 }
+        choiceSessionsFinalized: { type: integer, format: int64 }
+        plansScheduled: { type: integer, format: int64 }
+        plansCancelled: { type: integer, format: int64 }
+        plansPast: { type: integer, format: int64 }
+        visitsConfirmed: { type: integer, format: int64 }
+        supportTickets: { type: integer, format: int64 }
+        placeReports: { type: integer, format: int64 }
+        recentEvents:
+          type: array
+          items: { $ref: '#/components/schemas/AdminUserEvent' }
+    AdminUserEvent:
+      type: object
+      required: [name, occurredAt]
+      properties:
+        name: { type: string }
+        occurredAt: { type: string, format: date-time }
+        objectId: { type: string, nullable: true }
+        platform: { type: string, nullable: true }
+
+    SiteContent:
+      type: object
+      required: [homeHero, homeBanner, faq, terms, privacy, contact, footer]
+      properties:
+        homeHero:
+          type: object
+          required: [title, subtitle]
+          properties:
+            title: { type: string, maxLength: 120 }
+            subtitle: { type: string, maxLength: 300 }
+        homeBanner:
+          type: object
+          required: [enabled, text]
+          properties:
+            enabled: { type: boolean }
+            text: { type: string, maxLength: 200 }
+            linkUrl: { type: string, maxLength: 500, nullable: true }
+        faq:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required: [question, answer]
+            properties:
+              question: { type: string, maxLength: 200 }
+              answer: { type: string, maxLength: 2000 }
+        terms:
+          type: object
+          required: [body]
+          properties:
+            body: { type: string, maxLength: 20000, description: 'Văn bản thường; dòng trống tách đoạn' }
+        privacy:
+          type: object
+          required: [body]
+          properties:
+            body: { type: string, maxLength: 20000 }
+        contact:
+          type: object
+          properties:
+            email: { type: string, maxLength: 200, nullable: true }
+            phone: { type: string, maxLength: 30, nullable: true }
+            address: { type: string, maxLength: 300, nullable: true }
+            facebook: { type: string, maxLength: 300, nullable: true }
+        footer:
+          type: object
+          required: [text]
+          properties:
+            text: { type: string, maxLength: 300 }
+    AdminSiteContent:
+      allOf:
+        - $ref: '#/components/schemas/SiteContent'
+        - type: object
+          properties:
+            updatedAt: { type: string, format: date-time, nullable: true }
+            updatedBy: { type: string, format: uuid, nullable: true }
+    AdminNotificationRequest:
+      type: object
+      required: [summary, target]
+      properties:
+        summary: { type: string, minLength: 1, maxLength: 500 }
+        target: { type: string, enum: [ALL, USER] }
+        userId: { type: string, format: uuid, description: Bắt buộc khi target = USER }
+    AdminNotificationSent:
+      type: object
+      required: [summary, target, recipients, sentAt]
+      properties:
+        summary: { type: string }
+        target: { type: string, enum: [ALL, USER] }
+        userId: { type: string, format: uuid, nullable: true }
+        recipients: { type: integer, format: int64 }
+        sentAt: { type: string, format: date-time }
+        sentBy: { type: string, format: uuid, nullable: true }
+    AdminNotificationSentPage:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/AdminNotificationSent' }
+        page: { $ref: '#/components/schemas/PageMeta' }
+
     # ── saved lists ──
     SavedListWrite:
       type: object
@@ -2456,7 +2864,7 @@ components:
       required: [id, type, summary, createdAt]
       properties:
         id: { type: string, format: uuid }
-        type: { type: string, enum: [DATE_PLAN_UPDATED, DATE_PLAN_CANCELLED, SUPPORT_REPLIED, SUPPORT_STATUS_CHANGED] }
+        type: { type: string, enum: [DATE_PLAN_UPDATED, DATE_PLAN_CANCELLED, SUPPORT_REPLIED, SUPPORT_STATUS_CHANGED, ADMIN_ANNOUNCEMENT] }
         objectType: { type: string }
         objectId: { type: string, format: uuid }
         summary: { type: string, description: Nội dung tối thiểu; mở đối tượng phải kiểm tra quyền lại }

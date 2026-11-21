@@ -22,6 +22,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 import vn.gowithbae.api.model.AuthToken;
 import vn.gowithbae.api.model.User;
+import vn.gowithbae.common.web.Problems;
 import vn.gowithbae.platform.RequestRateLimiter;
 import vn.gowithbae.platform.SecretHash;
 
@@ -47,7 +48,9 @@ public class AuthService {
 
     private record Challenge(UUID id,String email,UUID userId,String codeHash,int attempts,
             OffsetDateTime expiresAt,OffsetDateTime createdAt,OffsetDateTime usedAt) {}
-    private record Verification(User user,UUID sessionId,OffsetDateTime expiresAt,HttpStatus error) {}
+    private record Verification(User user,UUID sessionId,OffsetDateTime expiresAt,HttpStatus error,String errorCode) {
+        Verification(User user,UUID sessionId,OffsetDateTime expiresAt,HttpStatus error){this(user,sessionId,expiresAt,error,null);}
+    }
 
     public void request(String rawEmail,String purpose,UUID userId) {
         String email=normalizeEmail(rawEmail);
@@ -103,14 +106,25 @@ public class AuthService {
             User user=users.get(id);
             if(user.getStatus()!=vn.gowithbae.api.model.UserStatus.ACTIVE)
                 return new Verification(null,null,null,HttpStatus.UNAUTHORIZED);
-            if(isStaff(user) && !mfa.verify(id,staffCode)) {
-                jdbc.sql("UPDATE login_challenge SET attempts=attempts+1 WHERE id=:id").param("id",c.id()).update();
-                return new Verification(null,null,null,HttpStatus.BAD_REQUEST);
+            if(isStaff(user)) {
+                // OTP email đã đúng: báo rõ bước tiếp theo, không tính là nhập sai và chưa tiêu thụ OTP.
+                if(!mfa.isEnrolled(id))
+                    return new Verification(null,null,null,HttpStatus.UNAUTHORIZED,"MFA_NOT_ENROLLED");
+                if(staffCode==null || staffCode.isBlank())
+                    return new Verification(null,null,null,HttpStatus.UNAUTHORIZED,"STAFF_CODE_REQUIRED");
+                if(!mfa.verify(id,staffCode)) {
+                    jdbc.sql("UPDATE login_challenge SET attempts=attempts+1 WHERE id=:id").param("id",c.id()).update();
+                    return new Verification(null,null,null,HttpStatus.BAD_REQUEST);
+                }
             }
             jdbc.sql("UPDATE login_challenge SET used_at=now() WHERE id=:id").param("id",c.id()).update();
             var expires=OffsetDateTime.now(ZoneOffset.UTC).plus(policy.sessionTtl());
-            UUID sid=jdbc.sql("INSERT INTO access_session(user_id,expires_at) VALUES (:id,:expiry) RETURNING id")
-                    .param("id",id).param("expiry",expires).query(UUID.class).single();
+            UUID sid=jdbc.sql("""
+                    INSERT INTO access_session(user_id,expires_at,ip_address,user_agent,last_seen_at)
+                    VALUES (:id,:expiry,:ip,:agent,now()) RETURNING id
+                    """)
+                    .param("id",id).param("expiry",expires).param("ip",clientIp()).param("agent",userAgent())
+                    .query(UUID.class).single();
             return new Verification(user,sid,expires,null);
         });
         requireSuccess(result);
@@ -148,6 +162,10 @@ public class AuthService {
     }
 
     private void requireSuccess(Verification result) {
+        if("STAFF_CODE_REQUIRED".equals(result.errorCode()))
+            throw Problems.status(result.error(),result.errorCode(),"Nhập mã 6 số trong ứng dụng Authenticator");
+        if("MFA_NOT_ENROLLED".equals(result.errorCode()))
+            throw Problems.status(result.error(),result.errorCode(),"Tài khoản quản trị chưa kích hoạt TOTP; dùng link kích hoạt do quản trị viên cấp");
         if(result.error()!=null) throw new ResponseStatusException(result.error(),
                 result.error()==HttpStatus.TOO_MANY_REQUESTS ? "Mã đã vượt số lần thử" : "Mã không hợp lệ hoặc đã hết hiệu lực");
     }
@@ -201,6 +219,22 @@ public class AuthService {
         if(value.length()>254 || !value.matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+"))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Email không hợp lệ");
         return value;
+    }
+
+    /** IP người dùng cho lịch sử đăng nhập: ưu tiên X-Forwarded-For do reverse proxy (nginx) gắn. */
+    private String clientIp() {
+        var attrs=RequestContextHolder.getRequestAttributes();
+        if(!(attrs instanceof ServletRequestAttributes web)) return null;
+        String forwarded=web.getRequest().getHeader("X-Forwarded-For");
+        String ip=forwarded!=null && !forwarded.isBlank() ? forwarded.split(",")[0].trim() : web.getRequest().getRemoteAddr();
+        return ip==null ? null : ip.substring(0,Math.min(ip.length(),64));
+    }
+
+    private String userAgent() {
+        var attrs=RequestContextHolder.getRequestAttributes();
+        if(!(attrs instanceof ServletRequestAttributes web)) return null;
+        String agent=web.getRequest().getHeader("User-Agent");
+        return agent==null ? null : agent.substring(0,Math.min(agent.length(),300));
     }
 
     private String peer() {

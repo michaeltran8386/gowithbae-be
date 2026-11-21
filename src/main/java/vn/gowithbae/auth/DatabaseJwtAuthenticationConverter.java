@@ -12,6 +12,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.InvalidBearerTokenException;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /** Phiên, quyền hiện tại và điều kiện MFA lấy cùng snapshot, không ghép hai lần đọc có thể lệch nhau. */
 @Component
@@ -37,6 +38,15 @@ public class DatabaseJwtAuthenticationConverter implements Converter<Jwt,Abstrac
                     .query((rs,n)->Arrays.stream((String[])rs.getArray("roles").getArray())
                             .map(role->(GrantedAuthority)new SimpleGrantedAuthority("ROLE_"+role)).toList())
                     .optional().orElseThrow(DatabaseJwtAuthenticationConverter::invalid);
+            // Lịch sử hoạt động cho trang quản trị; ghi tối đa 5 phút một lần để không UPDATE mỗi request.
+            // Chỉ ghi ở bước xác thực của filter chain (ngoài transaction); CurrentUser gọi lại converter bên trong
+            // transaction (có khi chỉ-đọc) để kiểm tra quyền, lúc đó bỏ qua.
+            if(!TransactionSynchronizationManager.isActualTransactionActive()) {
+                jdbc.sql("""
+                        UPDATE access_session SET last_seen_at=now()
+                        WHERE id=:sid AND (last_seen_at IS NULL OR last_seen_at < now() - interval '5 minutes')
+                        """).param("sid",sid).update();
+            }
             return new JwtAuthenticationToken(jwt,authorities,jwt.getSubject());
         }catch(IllegalArgumentException|NullPointerException ex){throw invalid();}
     }

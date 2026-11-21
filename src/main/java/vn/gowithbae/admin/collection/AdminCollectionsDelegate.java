@@ -183,7 +183,7 @@ public class AdminCollectionsDelegate implements AdminCollectionsApiDelegate {
             byId.put(id, null);
         }
         jdbc.sql("""
-                SELECT c.id, c.title, c.body, c.visible_from, c.visible_until, f.storage_key AS cover_key
+                SELECT c.id, c.title, c.body, c.visible_from, c.visible_until, f.id::text AS cover_key
                 FROM collection c LEFT JOIN stored_file f ON f.id = c.cover_file_id
                 WHERE c.id IN (:ids)
                 """)

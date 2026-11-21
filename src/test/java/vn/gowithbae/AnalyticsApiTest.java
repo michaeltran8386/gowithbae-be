@@ -104,13 +104,13 @@ class AnalyticsApiTest {
                 .andExpect(jsonPath("$.medianMinutesToPlan.value").value(10))
                 .andExpect(jsonPath("$.placeViews.value").value(0))
                 .andExpect(jsonPath("$.placesMissingPrice.value").isEmpty())
-                .andExpect(jsonPath("$.openPlaceReports.note").value("Statistics provider unavailable"))
+                .andExpect(jsonPath("$.openPlaceReports.note").value("Không tính được với bộ lọc này"))
                 .andExpect(jsonPath("$.retention30d.value").isEmpty());
         String csv = mvc.perform(get("/api/v1/admin/reports/export.csv").header("Authorization", "Bearer " + token)
                 .param("from", day).param("to", day).param("areaId", area.toString()).param("platform", "WEB_DESKTOP"))
                 .andExpect(status().isOk()).andExpect(content().contentTypeCompatibleWith("text/csv"))
                 .andReturn().getResponse().getContentAsString();
-        assertThat(csv).contains("\"searches\",\"10.0\"", "\"zeroResultRate\",\"0.2\"", "\"placesMissingPrice\",\"\",\"Statistics provider unavailable\"");
+        assertThat(csv).contains("\"searches\",\"10.0\"", "\"zeroResultRate\",\"0.2\"", "\"placesMissingPrice\",\"\",\"Không tính được với bộ lọc này\"");
         assertThat(csv).doesNotContain("guest", admin.toString());
     }
     @Test void zeroDenominatorUnauthorizedAndInvalidPeriod() throws Exception {
@@ -176,6 +176,6 @@ class AnalyticsApiTest {
                 .andExpect(jsonPath("$.placesMissingHours.value").value(4))
                 .andExpect(jsonPath("$.openPlaceReports.value").value(0))
                 .andExpect(jsonPath("$.placesVerificationOverdue.value").isEmpty())
-                .andExpect(jsonPath("$.placesVerificationOverdue.note").value("Statistics provider unavailable"));
+                .andExpect(jsonPath("$.placesVerificationOverdue.note").value("Không tính được với bộ lọc này"));
     }
 }

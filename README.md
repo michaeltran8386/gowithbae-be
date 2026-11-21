@@ -6,11 +6,13 @@ Backend GoWithBae G1: Spring Boot 4.1 · Java 21 · PostgreSQL (Supabase) · Fly
 
 **Triển khai người A:** [docs/MEMBER_A.md](docs/MEMBER_A.md) (quyết định OQ, SMTP/TOTP, interface B/C).
 
-**Hướng dẫn làm việc (Supabase, quy trình endpoint, migration):** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · **Tech stack:** [TECHSTACK.md](TECHSTACK.md)
+**Luồng chức năng (đọc đầu tiên):** [docs/FLOWS.md](docs/FLOWS.md) — hệ thống làm được gì, mỗi luồng gọi API nào, quy tắc nào chặn ở server.
+
+**Hướng dẫn làm việc (Supabase, Docker, trang quản trị, quy trình endpoint, migration):** [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) · **Tech stack:** [TECHSTACK.md](TECHSTACK.md)
 
 ## API contract
 
-`api/openapi.yaml` là **nguồn chuẩn duy nhất** cho FE và BE (OpenAPI 3.0, contract 0.3.0, phủ FR-01..FR-35 của `GWB-REQ-G1` v1.1/CR-001; SRS hợp nhất v1.3).
+`api/openapi.yaml` là **nguồn chuẩn duy nhất** cho FE và BE (OpenAPI 3.0, contract 0.4.0, phủ FR-01..FR-35 của `GWB-REQ-G1` v1.1/CR-001; SRS hợp nhất v1.3).
 
 - `x-status: draft` + `x-oq`: hành vi phụ thuộc câu hỏi mở trong SRS §13. Hỏi PO trước khi implement, không tự chốt chính sách.
 - Build sinh code vào `target/generated-sources/openapi` (package `vn.gowithbae.api`):
@@ -26,6 +28,8 @@ Backend GoWithBae G1: Spring Boot 4.1 · Java 21 · PostgreSQL (Supabase) · Fly
 
 Không có Supabase? `./mvnw spring-boot:test-run` chạy với Postgres trong Docker (Testcontainers).
 
+Chạy cả hệ thống (DB, hộp thư giả, API, web) bằng Docker và tạo admin đầu tiên: [DEVELOPMENT.md §9–10](docs/DEVELOPMENT.md#9-chạy-cả-hệ-thống-bằng-docker).
+
 ## Test
 
 `./mvnw test`: cần Docker. Test chạy Flyway trên Postgres 17 thật và gọi API qua toàn bộ security filter chain.
@@ -33,24 +37,28 @@ Không có Supabase? `./mvnw spring-boot:test-run` chạy với Postgres trong D
 ## Cấu trúc
 
 ```
-api/openapi.yaml               contract
+api/openapi.yaml                 contract (nguồn chuẩn cho FE và BE)
 src/main/java/vn/gowithbae/
-  config/SecurityConfig.java   JWT HS256 (claim roles, sid); quy tắc URL thô
-  common/ApiExceptionHandler   lỗi → application/problem+json
-  place/PlacesDelegate.java    GET /places — endpoint mẫu chạy thật
-src/main/resources/db/migration
-  V1__init_schema.sql          toàn bộ schema §6
-  V2__seed_reference_data.sql  vai trò + nhãn lọc §5.1
-  V3__enable_rls_lock_supabase_api.sql  khóa Supabase Data API (RLS + revoke anon)
-  V4__visit_reminders_and_deduplication.sql  trạng thái nhắc riêng + chống trùng lượt đi + RLS
+  config/ common/ platform/      security, lỗi problem+json, AuditService/NotificationService/FileService
+  auth/ me/ savedlist/ notification/ upload/ analytics/ adminaccount/   phần A
+  place/ discovery/ content/ admin/{place,imports,taxonomy,collection}/ phần B
+  choice/ plan/ support/ report/                                        phần C
+src/main/resources/db/migration  V1–V4, V100+, V200, V300, V400+ (xem mục Đã có)
+docs/FLOWS.md                    luồng chức năng
+docs/DEVELOPMENT.md              cài đặt, Docker, quản trị, quy trình làm endpoint
 ```
 
 ## Đã có / chưa có
 
-Đã có: khung G1, GET /places mẫu và các module A: email OTP/JWT/logout/hồ sơ/đổi email/yêu cầu xóa, danh sách lưu, inbox, upload PNG/JPEG riêng tư, analytics, admin users/audit/report/CSV. Có kiểm tra sid hiện hành và TOTP cho nhân viên. Xem docs/MEMBER_A.md để biết quyết định và cấu hình.
+Đã có (chi tiết từng luồng trong [docs/FLOWS.md](docs/FLOWS.md)):
 
-B/C chưa implement trong lần này. PlaceQueryService của B chưa có: thêm nơi mới và detail list có item trả501 rõ ràng. StatisticsContributor và AccountLifecycleParticipant cần B/C nối; không giả thống kê hoặc query chéo bảng. FR-35 trong tag Me vẫn thuộc C. Không có URL download tệp công khai.
+| Nhóm | Chức năng |
+|---|---|
+| Tài khoản (A) | Email OTP, JWT theo phiên, đăng xuất, hồ sơ, đổi email, yêu cầu xóa; admin đăng nhập thêm mã Authenticator, cài qua link dùng một lần |
+| Khám phá (B) | Tìm không dấu + lọc khu vực/ngân sách/nhãn, chi tiết, so sánh ≤ 3, bộ sưu tập, ảnh công khai `/files/{id}`, nội dung web |
+| Thành viên (A, C) | Danh sách lưu, cùng chọn qua link mời, kế hoạch hẹn + `.ics` + nhắc "Đi chưa?", báo sai địa điểm, hỗ trợ, thông báo |
+| Quản trị | Địa điểm (nháp → duyệt → hiển thị, ảnh, điều kiện xuất bản), nhập CSV, nhãn/khu vực, bộ sưu tập, tài khoản (tạo, khóa/mở, vai trò, phiên, hoạt động), nội dung web, gửi thông báo, báo sai, ticket, báo cáo + CSV, nhật ký |
 
-SMTP cần cấu hình thật; nhân viên cần provisioning TOTP. Retention/purge production, backup, provider triển khai và dữ liệu Supabase thật chưa được kiểm chứng. Không gọi đây là bản phát hành production.
+Migration: V1–V4 nền, V100/V101 (A), V200 (B), V300 (C, đã chạy trên Supabase nhóm — **không sửa**), V400–V402 (quản trị). Migration mới phải đánh số > V402.
 
-V4 không tự xóa lượt đi trùng có sẵn. V100/V101 là migration của A; không sửa migration đã phát hành. Phối hợp thứ tự với khoảng V200 của B/V300 của C để tránh bỏ qua version thấp.
+Chưa có / đang chờ: chia sẻ kế hoạch tạo tay; lưu ảnh production (OQ-21, hiện lưu trên đĩa); RULE-21 khi chỉ có một admin (OQ-18); ngưỡng quá hạn xác minh (OQ-20); SMTP thật, backup, chính sách giữ dữ liệu. Không gọi đây là bản phát hành production.

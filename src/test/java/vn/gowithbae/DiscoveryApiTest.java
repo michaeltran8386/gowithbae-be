@@ -1,6 +1,7 @@
 package vn.gowithbae;
 
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.matchesPattern;
 import static org.hamcrest.Matchers.not;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -121,7 +122,7 @@ class DiscoveryApiTest {
                 .andExpect(jsonPath("$[*].title", hasItem("Đang hiển thị")))
                 .andExpect(jsonPath("$[*].title", hasItem("Không giới hạn")))
                 .andExpect(jsonPath("$[?(@.title == 'Đang hiển thị')].coverUrl")
-                        .value("https://cdn.test/files/collections/cover.jpg"));
+                        .value(hasItem(matchesPattern("https://cdn\\.test/files/[0-9a-f-]{36}"))));
     }
 
     @Test

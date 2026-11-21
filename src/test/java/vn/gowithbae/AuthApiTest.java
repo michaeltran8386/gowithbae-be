@@ -162,8 +162,9 @@ class AuthApiTest {
                 .andExpect(status().isAccepted());
         var body=new java.util.HashMap<String,String>();
         body.put("email","staff@example.test");body.put("code",mail.codes.get("staff@example.test"));
+        // OTP đúng nhưng thiếu TOTP: 401 có mã riêng để form hiện ô nhập, OTP chưa bị tiêu thụ.
         mvc.perform(post("/api/v1/auth/otp/verify").contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(body)))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("STAFF_CODE_REQUIRED"));
         String totp=vn.gowithbae.auth.StaffMfa.code(secret,java.time.Instant.now().getEpochSecond()/30);
         body.put("staffCode",totp);
         String response=mvc.perform(post("/api/v1/auth/otp/verify").contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(body)))

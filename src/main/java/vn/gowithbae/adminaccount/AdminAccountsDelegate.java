@@ -16,6 +16,9 @@ import vn.gowithbae.api.model.*;
 import vn.gowithbae.platform.AuditService;
 import vn.gowithbae.platform.CurrentUser;
 import vn.gowithbae.platform.AccountLifecycleParticipant;
+import vn.gowithbae.auth.AuthService;
+import vn.gowithbae.auth.MfaActivationService;
+import vn.gowithbae.common.web.Problems;
 
 @Service
 public class AdminAccountsDelegate implements AdminUsersApiDelegate {
@@ -23,9 +26,14 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
     private final CurrentUser current;
     private final AuditService audit;
     private final ObjectProvider<AccountLifecycleParticipant> lifecycle;
+    private final MfaActivationService activation;
+    private final AdminUserInsights insights;
 
     public AdminAccountsDelegate(JdbcClient jdbc, CurrentUser current, AuditService audit,
-            ObjectProvider<AccountLifecycleParticipant> lifecycle) {
+            ObjectProvider<AccountLifecycleParticipant> lifecycle, MfaActivationService activation,
+            AdminUserInsights insights) {
+        this.activation = activation;
+        this.insights = insights;
         this.jdbc = jdbc;
         this.current = current;
         this.audit = audit;
@@ -110,6 +118,97 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
                     Map.of("roles", roles.stream().map(Role::getValue).sorted().toList()), reason);
         }
         return ResponseEntity.ok(user(id));
+    }
+
+    /** Tạo tài khoản ACTIVE với vai trò chỉ định; tài khoản quản trị nhận link kích hoạt TOTP. */
+    @Override
+    @Transactional
+    public ResponseEntity<AdminUserCreated> adminCreateUser(AdminCreateUserRequest request) {
+        authorizeMutation();
+        String email = AuthService.normalizeEmail(request.getEmail());
+        if (email == null) throw bad("Invalid email");
+        Set<Role> requested = request.getRoles();
+        if (requested != null && requested.stream().anyMatch(Objects::isNull)) throw bad("Invalid roles");
+        Set<Role> roles = requested == null || requested.isEmpty() ? Set.of(Role.MEMBER) : requested;
+        String name = request.getDisplayName() == null || request.getDisplayName().isBlank()
+                ? "Thành viên" : request.getDisplayName().trim();
+        jdbc.sql("SELECT pg_advisory_xact_lock(hashtext(:key))").param("key", "account:" + email).query((rs, n) -> true).single();
+        if (jdbc.sql("SELECT EXISTS(SELECT 1 FROM app_user WHERE lower(email)=:email)").param("email", email)
+                .query(Boolean.class).single())
+            throw Problems.conflict("EMAIL_TAKEN", "Email đã có tài khoản");
+        UUID id = jdbc.sql("INSERT INTO app_user(email, display_name) VALUES (:email, :name) RETURNING id")
+                .param("email", email).param("name", name).query(UUID.class).single();
+        for (Role role : roles) jdbc.sql("INSERT INTO user_role(user_id, role_code, granted_by) VALUES (:id,:role,:actor)")
+                .param("id", id).param("role", role.getValue()).param("actor", current.id()).update();
+        audit.log(current.id(), "USER_CREATED", "app_user", id.toString(), null,
+                Map.of("roles", roles.stream().map(Role::getValue).sorted().toList()), null);
+        var created = new AdminUserCreated(user(id));
+        if (roles.stream().anyMatch(role -> role != Role.MEMBER)) created.activation(activation.issue(id, current.id()));
+        return ResponseEntity.status(HttpStatus.CREATED).body(created);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ResponseEntity<AdminUserDetail> adminGetUser(UUID userId) {
+        current.requireActive();
+        current.requireRole("SUPER_ADMIN");
+        AdminUser base = jdbc.sql("SELECT * FROM app_user WHERE id=:id").param("id", userId).query(this::mapUser)
+                .optional().orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found"));
+        var login = insights.loginSummary(userId);
+        return ResponseEntity.ok(new AdminUserDetail(base.getId(), base.getEmail(), base.getDisplayName(), base.getRoles(),
+                base.getStatus())
+                .avatarUrl(base.getAvatarUrl())
+                .createdAt(base.getCreatedAt())
+                .lockedReason(base.getLockedReason())
+                .mfaEnrolled(login.mfaEnrolled())
+                .lastLoginAt(login.lastLoginAt())
+                .lastSeenAt(login.lastSeenAt())
+                .activeSessions(login.activeSessions()));
+    }
+
+    @Override
+    @Transactional
+    public ResponseEntity<MfaActivationLink> adminIssueMfaActivation(UUID userId) {
+        authorizeMutation();
+        lockedUser(userId);
+        return ResponseEntity.ok(activation.issue(userId, current.id()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ResponseEntity<AdminSessionPage> adminListUserSessions(UUID userId, Integer page, Integer size) {
+        current.requireActive();
+        current.requireRole("SUPER_ADMIN");
+        requireExists(userId);
+        int p = page == null ? 0 : page, s = size == null ? 20 : size;
+        if (p < 0 || s < 1 || s > 100) throw bad("Invalid pagination");
+        return ResponseEntity.ok(insights.sessions(userId, p, s));
+    }
+
+    @Override
+    @Transactional
+    public ResponseEntity<Void> adminRevokeUserSessions(UUID userId) {
+        authorizeMutation();
+        AdminUser target = lockedUser(userId);
+        int revoked = jdbc.sql("UPDATE access_session SET revoked_at=now() WHERE user_id=:id AND revoked_at IS NULL")
+                .param("id", userId).update();
+        audit.log(current.id(), "USER_SESSIONS_REVOKED", "app_user", target.getId().toString(), null,
+                Map.of("revokedSessions", revoked), null);
+        return ResponseEntity.noContent().build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ResponseEntity<AdminUserActivity> adminGetUserActivity(UUID userId) {
+        current.requireActive();
+        current.requireRole("SUPER_ADMIN");
+        requireExists(userId);
+        return ResponseEntity.ok(insights.activity(userId));
+    }
+
+    private void requireExists(UUID id) {
+        if (!jdbc.sql("SELECT EXISTS(SELECT 1 FROM app_user WHERE id=:id)").param("id", id).query(Boolean.class).single())
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found");
     }
 
     private void authorizeMutation() {

@@ -65,6 +65,46 @@ public class StaffMfa {
         return false;
     }
 
+    public boolean isEnrolled(UUID userId) {
+        return jdbc.sql("SELECT EXISTS(SELECT 1 FROM staff_mfa WHERE user_id=:id)").param("id",userId).query(Boolean.class).single();
+    }
+
+    /** Secret Base32 160 bit mới cho link kích hoạt; chỉ lưu dưới dạng {@link #seal}. */
+    public String newSecret() {
+        byte[] bytes=new byte[20];random.nextBytes(bytes);
+        String alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+        var out=new StringBuilder();
+        int buffer=0,bits=0;
+        for(byte b:bytes){
+            buffer=(buffer<<8)|(b&255);bits+=8;
+            while(bits>=5){bits-=5;out.append(alphabet.charAt((buffer>>bits)&31));}
+            buffer&=(1<<bits)-1;
+        }
+        return out.toString();
+    }
+
+    public String seal(String secret){decode(secret);return encrypt(secret);}
+
+    public String unseal(String ciphertext){return decrypt(ciphertext);}
+
+    /**
+     * Bước thời gian (±1 quanh hiện tại) mà mã 6 số khớp, hoặc -1. Dùng khi xác nhận kích hoạt;
+     * đăng nhập dùng {@link #verify} có chống dùng lại.
+     */
+    public static long matchingStep(String secret,String supplied) {
+        if(supplied==null || !supplied.matches("[0-9]{6}"))return -1;
+        long step=Instant.now().getEpochSecond()/30;
+        for(long candidate=step-1;candidate<=step+1;candidate++){
+            if(MessageDigest.isEqual(code(secret,candidate).getBytes(StandardCharsets.US_ASCII),supplied.getBytes(StandardCharsets.US_ASCII)))return candidate;
+        }
+        return -1;
+    }
+
+    /** Đánh dấu bước đã dùng để mã vừa xác nhận kích hoạt không dùng lại được để đăng nhập. */
+    public void markStepUsed(UUID userId,long step) {
+        jdbc.sql("UPDATE staff_mfa SET last_step=GREATEST(last_step,:step) WHERE user_id=:id").param("step",step).param("id",userId).update();
+    }
+
     public static String code(String secret,long step) {
         try {
             Mac mac=Mac.getInstance("HmacSHA1");
