@@ -42,6 +42,13 @@ public final class Problems {
         return ex;
     }
 
+    /** Lỗi có mã nghiệp vụ {@code code} với status tùy chọn (vd. 401 STAFF_CODE_REQUIRED). */
+    public static ErrorResponseException status(HttpStatus status, String code, String detail) {
+        ErrorResponseException ex = of(status, detail);
+        ex.getBody().setProperty("code", code);
+        return ex;
+    }
+
     public static Map<String, String> fieldError(String field, String message) {
         return Map.of("field", field, "message", message);
     }
