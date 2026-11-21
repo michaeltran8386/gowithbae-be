@@ -35,7 +35,7 @@ public class MfaActivationService {
     private final String webBaseUrl;
 
     public MfaActivationService(JdbcClient jdbc, StaffMfa mfa, AuditService audit,
-            @Value("${app.web.base-url:${app.invite.base-url:http://localhost:5173}}") String webBaseUrl) {
+            @Value("${app.web.base-url:http://localhost:5173}") String webBaseUrl) {
         this.jdbc = jdbc;
         this.mfa = mfa;
         this.audit = audit;

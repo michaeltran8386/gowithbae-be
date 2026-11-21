@@ -40,6 +40,9 @@ app:
     from: ${SMTP_FROM:}
   auth:
     mfa-key: ${AUTH_MFA_KEY:${app.jwt.secret}}
+  places:
+    # Ngày kiểm tra cũ hơn số ngày này thì tính là "quá hạn xác minh" trong báo cáo (OQ-20 chưa chốt ngưỡng).
+    verification-max-age-days: ${PLACES_VERIFICATION_MAX_AGE_DAYS:180}
   files:
     # URL gốc ghép với id tệp cho ảnh địa điểm/bộ sưu tập. Để trống = /api/v1/files/ (backend tự phục vụ ảnh đã gắn).
     # Đặt khi chuyển sang CDN/lưu trữ ngoài phục vụ theo id (OQ-21).

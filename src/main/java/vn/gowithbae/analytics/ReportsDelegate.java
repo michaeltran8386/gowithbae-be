@@ -99,10 +99,10 @@ public class ReportsDelegate implements AdminReportsApiDelegate {
                     .activeMembers(metric((double) rs.getLong("members"))).activeAnonymous(metric((double) rs.getLong("anonymous")))
                     .searches(metric((double) searches)).placeViews(metric((double) rs.getLong("views")))
                     .saves(metric((double) rs.getLong("saves")))
-                    .zeroResultRate(measured != searches ? unavailable("Incomplete search/result correlation") : ratio(rs.getLong("zeroes"), searches))
+                    .zeroResultRate(measured != searches ? unavailable("Thiếu dữ liệu ghép lượt tìm với kết quả") : ratio(rs.getLong("zeroes"), searches))
                     .searchToPlanRate(ratio(rs.getLong("converted"), rs.getLong("searched_sessions")))
-                    .medianMinutesToPlan(rs.getObject("median") == null ? unavailable("No valid search-to-plan sessions") : metric(rs.getDouble("median")))
-                    .retention30d(rs.getLong("eligible") == 0 ? unavailable("No cohort with a complete 30-day window") : ratio(rs.getLong("returned"), rs.getLong("eligible")));
+                    .medianMinutesToPlan(rs.getObject("median") == null ? unavailable("Chưa có phiên tìm kiếm dẫn tới kế hoạch") : metric(rs.getDouble("median")))
+                    .retention30d(rs.getLong("eligible") == 0 ? unavailable("Chưa có nhóm người dùng đủ 30 ngày để tính") : ratio(rs.getLong("returned"), rs.getLong("eligible")));
             return r;
         }).single();
         Long[] quality = new Long[4];
@@ -137,11 +137,11 @@ public class ReportsDelegate implements AdminReportsApiDelegate {
     }
     private static MetricValue metric(Double value) { return new MetricValue().value(value); }
     private static MetricValue qualityMetric(Long value) {
-        return value == null ? unavailable("Statistics provider unavailable") : metric(value.doubleValue());
+        return value == null ? unavailable("Không tính được với bộ lọc này") : metric(value.doubleValue());
     }
     private static MetricValue unavailable(String note) { return new MetricValue().value(null).note(note); }
     private static MetricValue ratio(long numerator, long denominator) {
-        return denominator == 0 ? unavailable("No denominator") : metric((double) numerator / denominator);
+        return denominator == 0 ? unavailable("Chưa có dữ liệu") : metric((double) numerator / denominator);
     }
     private static void row(StringBuilder csv, String name, MetricValue value) {
         csv.append(cell(name)).append(',').append(cell(value.getValue() == null ? "" : value.getValue().toString()))
