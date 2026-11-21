@@ -43,9 +43,10 @@ src/main/java/vn/gowithbae/
   auth/ me/ savedlist/ notification/ upload/ analytics/ adminaccount/   phần A
   place/ discovery/ content/ admin/{place,imports,taxonomy,collection}/ phần B
   choice/ plan/ support/ report/                                        phần C
-src/main/resources/db/migration  V1–V4, V100+, V200, V300, V400+ (xem mục Đã có)
+src/main/resources/db/migration  V1–V4, V100–V101, V300, V400–V404 (xem docs/DATABASE.md)
 docker/compose.yaml              chạy cả hệ thống (db, mail, backend, web)
 docs/FLOWS.md                    luồng chức năng
+docs/DATABASE.md                 cấu trúc database (41 bảng), sơ đồ quan hệ
 docs/DEVELOPMENT.md              cài đặt, Docker, quản trị, quy trình làm endpoint
 ```
 
@@ -60,6 +61,6 @@ docs/DEVELOPMENT.md              cài đặt, Docker, quản trị, quy trình l
 | Thành viên (A, C) | Danh sách lưu, cùng chọn qua link mời, kế hoạch hẹn + `.ics` + nhắc "Đi chưa?" + link mời người ấy xem và trả lời, báo sai địa điểm, hỗ trợ, thông báo |
 | Quản trị | Địa điểm (nháp → duyệt → hiển thị, ảnh, điều kiện xuất bản), nhập CSV, nhãn/khu vực, bộ sưu tập, tài khoản (tạo, khóa/mở, vai trò, phiên, hoạt động), nội dung web, gửi thông báo, báo sai, ticket, báo cáo + CSV, nhật ký |
 
-Migration: V1–V4 nền, V100/V101 (A), V200 (B), V300 (C, đã chạy trên Supabase nhóm — **không sửa**), V400–V402 (quản trị), V403 (link mời xem kế hoạch). Migration mới phải đánh số > V403.
+Migration: V1–V4 nền, V100/V101 (A), V300 (C, đã chạy trên Supabase nhóm — **không sửa**), V400–V404. Migration mới phải đánh số > V404. Cấu trúc đầy đủ: [docs/DATABASE.md](docs/DATABASE.md).
 
 Chưa có / đang chờ: lưu ảnh production (OQ-21, hiện lưu trên đĩa); ngưỡng quá hạn xác minh (OQ-20); SMTP thật, backup, chính sách giữ dữ liệu. Không gọi đây là bản phát hành production.
