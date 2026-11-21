@@ -12,7 +12,7 @@ Backend GoWithBae G1: Spring Boot 4.1 · Java 21 · PostgreSQL (Supabase) · Fly
 
 ## API contract
 
-`api/openapi.yaml` là **nguồn chuẩn duy nhất** cho FE và BE (OpenAPI 3.0, contract 0.4.0, phủ FR-01..FR-35 của `GWB-REQ-G1` v1.1/CR-001; SRS hợp nhất v1.3).
+`api/openapi.yaml` là **nguồn chuẩn duy nhất** cho FE và BE (OpenAPI 3.0, contract 0.5.0, phủ FR-01..FR-35 của `GWB-REQ-G1` v1.1/CR-001; SRS hợp nhất v1.3).
 
 - `x-status: draft` + `x-oq`: hành vi phụ thuộc câu hỏi mở trong SRS §13. Hỏi PO trước khi implement, không tự chốt chính sách.
 - Build sinh code vào `target/generated-sources/openapi` (package `vn.gowithbae.api`):
@@ -57,9 +57,9 @@ docs/DEVELOPMENT.md              cài đặt, Docker, quản trị, quy trình l
 |---|---|
 | Tài khoản (A) | Email OTP, JWT theo phiên, đăng xuất, hồ sơ, đổi email, yêu cầu xóa; admin đăng nhập thêm mã Authenticator, cài qua link dùng một lần |
 | Khám phá (B) | Tìm không dấu + lọc khu vực/ngân sách/nhãn, chi tiết, so sánh ≤ 3, bộ sưu tập, ảnh công khai `/files/{id}`, nội dung web |
-| Thành viên (A, C) | Danh sách lưu, cùng chọn qua link mời, kế hoạch hẹn + `.ics` + nhắc "Đi chưa?", báo sai địa điểm, hỗ trợ, thông báo |
+| Thành viên (A, C) | Danh sách lưu, cùng chọn qua link mời, kế hoạch hẹn + `.ics` + nhắc "Đi chưa?" + link mời người ấy xem và trả lời, báo sai địa điểm, hỗ trợ, thông báo |
 | Quản trị | Địa điểm (nháp → duyệt → hiển thị, ảnh, điều kiện xuất bản), nhập CSV, nhãn/khu vực, bộ sưu tập, tài khoản (tạo, khóa/mở, vai trò, phiên, hoạt động), nội dung web, gửi thông báo, báo sai, ticket, báo cáo + CSV, nhật ký |
 
-Migration: V1–V4 nền, V100/V101 (A), V200 (B), V300 (C, đã chạy trên Supabase nhóm — **không sửa**), V400–V402 (quản trị). Migration mới phải đánh số > V402.
+Migration: V1–V4 nền, V100/V101 (A), V200 (B), V300 (C, đã chạy trên Supabase nhóm — **không sửa**), V400–V402 (quản trị), V403 (link mời xem kế hoạch). Migration mới phải đánh số > V403.
 
-Chưa có / đang chờ: chia sẻ kế hoạch tạo tay; lưu ảnh production (OQ-21, hiện lưu trên đĩa); ngưỡng quá hạn xác minh (OQ-20); SMTP thật, backup, chính sách giữ dữ liệu. Không gọi đây là bản phát hành production.
+Chưa có / đang chờ: lưu ảnh production (OQ-21, hiện lưu trên đĩa); ngưỡng quá hạn xác minh (OQ-20); SMTP thật, backup, chính sách giữ dữ liệu. Không gọi đây là bản phát hành production.
