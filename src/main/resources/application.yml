@@ -37,7 +37,13 @@ app:
   jwt:
     secret: ${JWT_SECRET}
   mail:
+    # Cách gửi mã OTP: smtp (mặc định, dùng spring.mail.*) hoặc brevo (API HTTPS, khi máy chủ chặn cổng SMTP như Render free).
+    provider: ${MAIL_PROVIDER:smtp}
+    # Địa chỉ người gửi; với brevo phải là sender đã xác minh trong Brevo.
     from: ${SMTP_FROM:}
+    from-name: ${MAIL_FROM_NAME:GoWithBae}
+    brevo:
+      api-key: ${BREVO_API_KEY:}
   auth:
     mfa-key: ${AUTH_MFA_KEY:${app.jwt.secret}}
   places:

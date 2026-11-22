@@ -375,8 +375,23 @@ Ngoài `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, SMTP:
 | `SUPABASE_STORAGE_BUCKET` | `gowithbae-files` (mặc định, có thể bỏ) |
 | `APP_WEB_BASE_URL` | `https://gowithbae.vercel.app` (link kích hoạt admin, link mời xem kế hoạch) |
 | `APP_INVITE_BASE_URL` | `https://gowithbae.vercel.app/invite` (link mời cùng chọn, phải kèm `/invite`) |
+| `MAIL_PROVIDER` | `brevo`. **Bắt buộc trên Render free**: gói này chặn cổng SMTP (25/465/587), để `smtp` thì OTP báo "Chưa gửi được email" |
+| `BREVO_API_KEY` | API key của Brevo (bên dưới). Không đưa ra frontend |
+| `SMTP_FROM` | Email người gửi **đã xác minh** trong Brevo, vd. Gmail của nhóm |
+| `MAIL_FROM_NAME` | Tên hiển thị người gửi, mặc định `GoWithBae` |
 
 Backend vẫn phục vụ ảnh qua `GET /api/v1/files/{id}` và giữ nguyên quy tắc ảnh nào được công khai; bucket không bật public.
+
+Với `MAIL_PROVIDER=brevo` các biến `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` không được dùng (có thể giữ).
+
+**Thiết lập Brevo** (miễn phí 300 email/ngày):
+
+1. Đăng ký tại brevo.com.
+2. **Senders, Domains & Dedicated IPs → Senders → Add a sender**: nhập email người gửi, mở email xác minh Brevo gửi tới và bấm xác nhận. Email này dùng làm `SMTP_FROM`.
+3. **SMTP & API → API Keys → Generate a new API key** (bắt đầu bằng `xkeysib-`), dán vào `BREVO_API_KEY` trên Render.
+4. Deploy lại, thử đăng nhập ở web. Lỗi thì xem Logs Render, dòng `Brevo từ chối gửi OTP: HTTP …` cho biết lý do (sai key, sender chưa xác minh, hết hạn mức).
+
+Gửi từ Gmail qua Brevo có thể bị một số hộp thư xếp vào Spam (Gmail không cho Brevo ký thay tên miền gmail.com). Có tên miền riêng thì xác minh domain trong Brevo để mail vào hộp thư chính.
 
 ### 11.2 Tạo admin trên production (Render không có Shell)
 
