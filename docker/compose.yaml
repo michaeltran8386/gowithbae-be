@@ -1,7 +1,7 @@
 # Chạy cả hệ thống GoWithBae trên máy: database, hộp thư giả, backend, web.
 #
 #   cd gowithbae-be/docker
-#   cp .env.example .env        # điền DB_PASSWORD, JWT_SECRET (và FE_DIR nếu thư mục frontend không tên gowithbae-fe)
+#   cp .env.example .env        # điền GWB_DB_PASSWORD, JWT_SECRET (và FE_DIR nếu thư mục frontend không tên gowithbae-fe)
 #   docker compose up -d --build
 #
 # Web http://localhost:8081 · hộp thư giả (mã OTP) http://localhost:8025 · API http://localhost:8090/api/v1
@@ -15,7 +15,9 @@ services:
     environment:
       POSTGRES_DB: gowithbae
       POSTGRES_USER: gowithbae
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?Đặt DB_PASSWORD trong docker/.env}
+      # Tên riêng GWB_DB_PASSWORD: biến DB_PASSWORD có thể đã đặt sẵn trong Windows/shell (mật khẩu Supabase để chạy
+      # backend local) và compose ưu tiên biến shell hơn docker/.env khi thay ${...}.
+      POSTGRES_PASSWORD: ${GWB_DB_PASSWORD:?Đặt GWB_DB_PASSWORD trong docker/.env}
     ports:
       - "5432:5432"
     volumes:
@@ -44,12 +46,13 @@ services:
         condition: service_healthy
       mail:
         condition: service_started
-    # Secret (JWT_SECRET, DB_PASSWORD, AUTH_MFA_KEY nếu có) lấy từ docker/.env.
+    # Secret (JWT_SECRET, AUTH_MFA_KEY nếu có) lấy từ docker/.env; mật khẩu DB đặt ở environment bên dưới.
     # Không khai AUTH_MFA_KEY rỗng ở đây: để trống thì backend dùng khóa dẫn xuất từ JWT_SECRET.
     env_file: .env
     environment:
       DB_URL: jdbc:postgresql://db:5432/gowithbae
       DB_USERNAME: gowithbae
+      DB_PASSWORD: ${GWB_DB_PASSWORD:?Đặt GWB_DB_PASSWORD trong docker/.env}
       SMTP_HOST: mail
       SMTP_PORT: "1025"
       SMTP_AUTH: "false"

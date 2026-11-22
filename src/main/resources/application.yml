@@ -46,6 +46,9 @@ app:
       api-key: ${BREVO_API_KEY:}
   auth:
     mfa-key: ${AUTH_MFA_KEY:${app.jwt.secret}}
+  accounts:
+    # Tài khoản yêu cầu xóa mà quản trị viên không khôi phục sẽ tự bị xóa (ẩn danh hóa) sau số ngày này.
+    deletion-grace-days: ${ACCOUNT_DELETION_GRACE_DAYS:30}
   places:
     # Ngày kiểm tra cũ hơn số ngày này thì tính là "quá hạn xác minh" trong báo cáo (OQ-20 chưa chốt ngưỡng).
     verification-max-age-days: ${PLACES_VERIFICATION_MAX_AGE_DAYS:180}

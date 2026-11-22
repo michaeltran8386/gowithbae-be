@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: GoWithBae G1 API
-  version: 0.5.0
+  version: 0.6.0
   description: |
     API contract cho GoWithBae G1 (web khách hàng + quản trị nội bộ).
     Nguồn yêu cầu: `GWB-REQ-G1` v1.1 (15-11-2026), SRS hợp nhất v1.2 và CR-001.
@@ -1615,6 +1615,53 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AdminUser' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /admin/users/{userId}/restore:
+    post:
+      tags: [AdminUsers]
+      operationId: adminRestoreUser
+      summary: Hủy yêu cầu xóa tài khoản (DELETION_REQUESTED → ACTIVE); bắt buộc lý do, ghi audit
+      description: Link chia sẻ đã bị thu hồi lúc yêu cầu xóa không tự mở lại.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody: { $ref: '#/components/requestBodies/Reason' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /admin/users/{userId}/erase:
+    post:
+      tags: [AdminUsers]
+      operationId: adminEraseUser
+      summary: Xóa tài khoản bằng ẩn danh hóa (không hoàn tác); bắt buộc lý do và gõ lại email
+      description: |
+        Áp dụng cho ACTIVE, LOCKED, DELETION_REQUESTED. Không xóa chính mình hoặc quản trị cuối cùng.
+        Xóa dữ liệu cá nhân (danh sách lưu, kế hoạch, phiên cùng chọn, ticket, thông báo, phiên đăng nhập, Authenticator, tệp);
+        giữ dòng tài khoản dạng "Tài khoản đã xóa" để nhật ký, báo sai, địa điểm vẫn đúng. Email cũ đăng ký lại được.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/UserId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, confirmEmail]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 1000 }
+                confirmEmail: { type: string, maxLength: 320, description: Phải khớp email hiện tại của tài khoản }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /admin/users/{userId}/roles:
     put:
       tags: [AdminUsers]
@@ -2481,7 +2528,8 @@ components:
       enum: [MEMBER, EDITOR, REVIEWER, SUPPORT, SUPER_ADMIN]
     UserStatus:
       type: string
-      enum: [ACTIVE, LOCKED, DELETION_REQUESTED]
+      enum: [ACTIVE, LOCKED, DELETION_REQUESTED, DELETED]
+      description: DELETED = đã ẩn danh hóa (trạng thái cuối, không khôi phục, không đăng nhập)
     AuthToken:
       type: object
       required: [accessToken, expiresAt, user]
@@ -2513,6 +2561,9 @@ components:
           properties:
             createdAt: { type: string, format: date-time }
             lockedReason: { type: string, nullable: true }
+            deletionRequestedAt: { type: string, format: date-time, nullable: true }
+            scheduledDeletionAt: { type: string, format: date-time, nullable: true, description: Thời điểm backend tự xóa nếu không khôi phục }
+            deletedAt: { type: string, format: date-time, nullable: true }
     AdminUserPage:
       type: object
       required: [items, page]

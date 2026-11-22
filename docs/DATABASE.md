@@ -1,6 +1,6 @@
 # Cấu trúc database — GoWithBae G1
 
-Tài liệu này mô tả **database đang chạy thật** sau migration V1 → V404 (PostgreSQL 17 / Supabase). Danh sách cột ở mục 5 được sinh từ schema thật (`information_schema`, `pg_constraint`, `pg_indexes`), không chép tay. Đổi schema thì viết migration mới rồi cập nhật tài liệu này.
+Tài liệu này mô tả **database đang chạy thật** sau migration V1 → V405 (PostgreSQL 17 / Supabase). Danh sách cột ở mục 5 được sinh từ schema thật (`information_schema`, `pg_constraint`, `pg_indexes`), không chép tay. Đổi schema thì viết migration mới rồi cập nhật tài liệu này.
 
 Liên quan: [FLOWS.md](FLOWS.md) (luồng chức năng và API) · [DEVELOPMENT.md](DEVELOPMENT.md) §5 (quy tắc migration).
 
@@ -125,8 +125,9 @@ erDiagram
 | V402 | quản trị | Nội dung web (`site_content`) + văn mẫu |
 | V403 | C | Link mời xem kế hoạch (`date_plan_invite`) |
 | V404 | chung | Index cho tìm kiếm (trigram), khóa ngoại hay truy vấn, hoạt động người dùng, nhật ký; CHECK loại thông báo và chuỗi rỗng; trigger nhật ký chỉ-thêm |
+| V405 | A | Xóa tài khoản: trạng thái `DELETED`, cột `deletion_requested_at`, `deleted_at` |
 
-`beforeMigrate.sql` (callback Flyway) tạo role `anon`, `authenticated` dạng NOLOGIN để migration chạy được cả trên Postgres thường lẫn Supabase. Migration mới phải đánh số lớn hơn số cao nhất đang có (hiện là V404), vì Flyway từ chối version thấp hơn version đã chạy.
+`beforeMigrate.sql` (callback Flyway) tạo role `anon`, `authenticated` dạng NOLOGIN để migration chạy được cả trên Postgres thường lẫn Supabase. Migration mới phải đánh số lớn hơn số cao nhất đang có (hiện là V405), vì Flyway từ chối version thấp hơn version đã chạy.
 
 Dữ liệu demo không nằm trong migration: `scripts/dev-seed.sql` (chạy tay, xem DEVELOPMENT.md §9.1).
 
@@ -136,7 +137,7 @@ Ký hiệu: ✓ = `NOT NULL`; `→ bảng` = khóa ngoại; `{A, B}` = giá tr�
 
 ### 5.1 Tài khoản và phiên (A)
 
-- `app_user`: tài khoản. Email duy nhất không phân biệt hoa thường. Khóa thì `status = LOCKED` + `locked_reason`; yêu cầu xóa thì `DELETION_REQUESTED`.
+- `app_user`: tài khoản. Email duy nhất không phân biệt hoa thường. Khóa thì `status = LOCKED` + `locked_reason`. Yêu cầu xóa thì `DELETION_REQUESTED` + `deletion_requested_at` (tự xóa sau 30 ngày nếu admin không khôi phục). Đã xóa thì `DELETED` + `deleted_at`: dòng được giữ nhưng email đổi thành `deleted+<id>@deleted.invalid`, tên "Tài khoản đã xóa", dữ liệu cá nhân ở các bảng khác bị xóa.
 - `role`, `user_role`: vai trò (MEMBER, SUPER_ADMIN, EDITOR, REVIEWER, SUPPORT) và gán vai trò cho tài khoản, có người cấp.
 - `login_challenge`: mã OTP email (đăng nhập, đổi email); chỉ lưu hash, đếm số lần sai.
 - `access_session`: mỗi lần đăng nhập một dòng; JWT mang `sid` = id dòng này, thu hồi là mất hiệu lực ngay.
@@ -151,12 +152,14 @@ Ký hiệu: ✓ = `NOT NULL`; `→ bảng` = khóa ngoại; `{A, B}` = giá tr�
 | `email` | text | ✓ |  |  |
 | `display_name` | text | ✓ |  |  |
 | `avatar_file_id` | uuid |  |  | → `stored_file` |
-| `status` | text | ✓ | ACTIVE | {ACTIVE, LOCKED, DELETION_REQUESTED} |
+| `status` | text | ✓ | ACTIVE | {ACTIVE, LOCKED, DELETION_REQUESTED, DELETED} |
 | `locked_reason` | text |  |  |  |
 | `created_at` | timestamptz | ✓ | now() |  |
 | `updated_at` | timestamptz | ✓ | now() |  |
+| `deletion_requested_at` | timestamptz |  |  |  |
+| `deleted_at` | timestamptz |  |  |  |
 
-Ràng buộc và index thêm: `UNIQUE INDEX (lower(email))`.
+Ràng buộc và index thêm: CHECK `(((status = 'DELETED') = (deleted_at IS NOT NULL)))`; CHECK `(((status <> 'DELETION_REQUESTED') OR (deletion_requested_at IS NOT NULL)))`; `INDEX (deletion_requested_at) WHERE (status = 'DELETION_REQUESTED'::text)`; `UNIQUE INDEX (lower(email))`.
 
 #### `role`
 

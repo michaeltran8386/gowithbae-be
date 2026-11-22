@@ -1,6 +1,6 @@
 # Luồng chức năng — Backend GoWithBae G1
 
-Tài liệu cho thành viên mới: hệ thống đang làm được gì, mỗi luồng gọi API nào theo thứ tự nào, quy tắc nào chặn ở server, và code nằm ở đâu. Chi tiết request/response xem `api/openapi.yaml` (contract 0.5.0); cách chạy và quy ước code xem [DEVELOPMENT.md](DEVELOPMENT.md).
+Tài liệu cho thành viên mới: hệ thống đang làm được gì, mỗi luồng gọi API nào theo thứ tự nào, quy tắc nào chặn ở server, và code nằm ở đâu. Chi tiết request/response xem `api/openapi.yaml` (contract 0.6.0); cách chạy và quy ước code xem [DEVELOPMENT.md](DEVELOPMENT.md).
 
 Mọi đường dẫn bên dưới có tiền tố `/api/v1`. Lỗi trả `application/problem+json` (`status`, `detail`, có thể có `code`, `errors[]` theo trường).
 
@@ -169,7 +169,13 @@ Tối đa 2 MB, 1000 dòng. Nhãn nhiều mã cách nhau bằng `;`. Giá `KNOWN
 | Khóa / mở | `POST .../lock`, `.../unlock` (bắt buộc lý do) |
 | Vai trò | `PUT .../roles` |
 | Phiên đăng nhập | `GET .../sessions`; đăng xuất mọi thiết bị `POST .../sessions/revoke` |
+| Khôi phục | `POST .../restore {reason}`: chỉ tài khoản đang chờ xóa (`DELETION_REQUESTED`) → `ACTIVE`; link chia sẻ đã thu hồi không tự mở lại |
+| Xóa | `POST .../erase {reason, confirmEmail}`: ẩn danh hóa, không hoàn tác (bên dưới). Không xóa chính mình |
 | Hoạt động | `GET .../activity`: chỉ đếm (danh sách lưu, phiên cùng chọn, kế hoạch, ticket, báo sai) + 50 sự kiện gần nhất. Không trả ghi chú kế hoạch, nội dung tin nhắn hay mô tả báo sai |
+
+**Vòng đời xóa tài khoản:** người dùng bấm xóa (`POST /me/deletion-request`) → `DELETION_REQUESTED`, ghi `deletion_requested_at`, thu hồi phiên và link. Trong 30 ngày (`ACCOUNT_DELETION_GRACE_DAYS`) admin **Khôi phục** hoặc **Xóa ngay**; quá hạn thì job của backend tự xóa (chạy mỗi 6 giờ và sau khởi động 2 phút). Admin cũng xóa được tài khoản đang hoạt động/đã khóa (tài khoản rác), bắt buộc lý do và gõ lại email.
+
+**Xóa = ẩn danh hóa** (`AccountEraser` + `AccountLifecycleParticipant.eraseData` của từng module, chung một transaction): email → `deleted+<id>@deleted.invalid`, tên → "Tài khoản đã xóa", `status = DELETED`. Xóa vai trò, phiên, OTP, Authenticator, danh sách lưu, thông báo, kế hoạch, phiên cùng chọn, phiếu, ticket, tệp không còn dùng (cả trên Storage). Giữ báo sai (bỏ người gửi), nhật ký, sự kiện phân tích (đổi sang mã ẩn danh). Email cũ đăng ký lại được thành tài khoản mới. Khi đang chờ xóa hoặc đã xóa: không khóa, mở khóa, đổi vai trò được.
 
 ### 4.5 Nội dung web và thông báo (B + A)
 
