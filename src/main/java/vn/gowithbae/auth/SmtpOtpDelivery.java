@@ -2,6 +2,7 @@ package vn.gowithbae.auth;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.HttpStatus;
 import org.springframework.mail.MailException;
 import org.springframework.mail.SimpleMailMessage;
@@ -9,7 +10,9 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
+/** Gửi OTP qua SMTP (mặc định; local dùng Mailpit). Máy chủ chặn cổng SMTP thì dùng {@link BrevoOtpDelivery}. */
 @Component
+@ConditionalOnProperty(name = "app.mail.provider", havingValue = "smtp", matchIfMissing = true)
 public class SmtpOtpDelivery implements OtpDelivery {
     private final ObjectProvider<JavaMailSender> senders;
     private final String from;
