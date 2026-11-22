@@ -96,7 +96,7 @@ class AdminAccountsApiTest {
     @Test void blankReasonAndDeletionStateAndBadPaginationAreRejected() throws Exception {
         mvc.perform(post("/api/v1/admin/users/" + member + "/lock").header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"  \"}")).andExpect(status().isBadRequest());
-        jdbc.sql("UPDATE app_user SET status='DELETION_REQUESTED' WHERE id=:id").param("id", member).update();
+        jdbc.sql("UPDATE app_user SET status='DELETION_REQUESTED', deletion_requested_at=now() WHERE id=:id").param("id", member).update();
         mvc.perform(post("/api/v1/admin/users/" + member + "/unlock").header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"test\"}")).andExpect(status().isConflict());
         mvc.perform(get("/api/v1/admin/users").header("Authorization", "Bearer " + token).param("size", "101"))

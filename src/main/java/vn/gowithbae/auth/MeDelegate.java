@@ -83,7 +83,7 @@ public class MeDelegate implements MeApiDelegate {
                     .query(Long.class).single();
             if(admins<=1)throw new ResponseStatusException(HttpStatus.CONFLICT,"Không thể xóa quản trị cuối cùng");
         }
-        jdbc.sql("UPDATE app_user SET status='DELETION_REQUESTED',updated_at=now() WHERE id=:id").param("id",id).update();
+        jdbc.sql("UPDATE app_user SET status='DELETION_REQUESTED',deletion_requested_at=now(),updated_at=now() WHERE id=:id").param("id",id).update();
         jdbc.sql("UPDATE access_session SET revoked_at=now() WHERE user_id=:id AND revoked_at IS NULL").param("id",id).update();
         jdbc.sql("UPDATE login_challenge SET used_at=now() WHERE used_at IS NULL AND (user_id=:id OR email=:email)")
                 .param("id",id).param("email",account.getEmail()).update();

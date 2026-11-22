@@ -28,10 +28,15 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
     private final ObjectProvider<AccountLifecycleParticipant> lifecycle;
     private final MfaActivationService activation;
     private final AdminUserInsights insights;
+    private final AccountEraser eraser;
+    private final int graceDays;
 
     public AdminAccountsDelegate(JdbcClient jdbc, CurrentUser current, AuditService audit,
             ObjectProvider<AccountLifecycleParticipant> lifecycle, MfaActivationService activation,
-            AdminUserInsights insights) {
+            AdminUserInsights insights, AccountEraser eraser,
+            @org.springframework.beans.factory.annotation.Value("${app.accounts.deletion-grace-days:30}") int graceDays) {
+        this.eraser = eraser;
+        this.graceDays = graceDays;
         this.activation = activation;
         this.insights = insights;
         this.jdbc = jdbc;
@@ -46,7 +51,7 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
         current.requireActive();
         current.requireRole("SUPER_ADMIN");
         int p = page == null ? 0 : page, s = size == null ? 20 : size;
-        if (p < 0 || s < 1 || s > 100) throw bad("Invalid pagination");
+        if (p < 0 || s < 1 || s > 100) throw bad("Tham số phân trang không hợp lệ");
         Map<String, Object> params = new HashMap<>();
         String where = " WHERE true";
         if (q != null && !q.isBlank()) {
@@ -77,8 +82,8 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
         authorizeMutation();
         reason = reason(reason);
         AdminUser before = lockedUser(id);
-        if (lock && id.equals(current.id())) throw conflict("Cannot lock your own account");
-        if (before.getStatus() == UserStatus.DELETION_REQUESTED) throw conflict("Deletion is handled separately");
+        if (lock && id.equals(current.id())) throw conflict("Không thể tự khóa tài khoản của mình");
+        requireChangeable(before);
         if (lock) protectLastAdmin(before, false);
         UserStatus status = lock ? UserStatus.LOCKED : UserStatus.ACTIVE;
         jdbc.sql("UPDATE app_user SET status=:status, locked_reason=:reason, updated_at=now() WHERE id=:id")
@@ -94,18 +99,47 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
 
     @Override
     @Transactional
+    public ResponseEntity<AdminUser> adminRestoreUser(UUID id, AdminLockUserRequest request) {
+        authorizeMutation();
+        String reason = reason(request.getReason());
+        AdminUser before = lockedUser(id);
+        if (before.getStatus() != UserStatus.DELETION_REQUESTED) throw conflict("Chỉ khôi phục được tài khoản đang chờ xóa");
+        jdbc.sql("UPDATE app_user SET status='ACTIVE', deletion_requested_at=NULL, updated_at=now() WHERE id=:id")
+                .param("id", id).update();
+        audit.log(current.id(), "USER_RESTORED", "app_user", id.toString(),
+                Map.of("status", before.getStatus().getValue()), Map.of("status", "ACTIVE"), reason);
+        return ResponseEntity.ok(user(id));
+    }
+
+    @Override
+    @Transactional
+    public ResponseEntity<AdminUser> adminEraseUser(UUID id, AdminEraseUserRequest request) {
+        authorizeMutation();
+        String reason = reason(request.getReason());
+        AdminUser before = lockedUser(id);
+        if (before.getStatus() == UserStatus.DELETED) throw conflict("Tài khoản đã bị xóa");
+        if (id.equals(current.id())) throw conflict("Không thể tự xóa tài khoản của mình");
+        if (request.getConfirmEmail() == null || !request.getConfirmEmail().trim().equalsIgnoreCase(before.getEmail()))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email xác nhận không khớp");
+        protectLastAdmin(before, false);
+        eraser.erase(id, current.id(), reason);
+        return ResponseEntity.ok(user(id));
+    }
+
+    @Override
+    @Transactional
     public ResponseEntity<AdminUser> adminSetUserRoles(UUID id, AdminSetUserRolesRequest request) {
         authorizeMutation();
         String reason = reason(request.getReason());
         Set<Role> roles = request.getRoles();
-        if (roles == null || roles.contains(null)) throw bad("Invalid roles");
+        if (roles == null || roles.contains(null)) throw bad("Vai trò không hợp lệ");
         AdminUser before = lockedUser(id);
-        if (before.getStatus() == UserStatus.DELETION_REQUESTED) throw conflict("Deletion is handled separately");
-        if (id.equals(current.id()) && !roles.containsAll(before.getRoles())) throw conflict("Cannot demote yourself");
+        requireChangeable(before);
+        if (id.equals(current.id()) && !roles.containsAll(before.getRoles())) throw conflict("Không thể tự bỏ vai trò của mình");
         protectLastAdmin(before, roles.contains(Role.SUPER_ADMIN));
         for (Role role : roles) {
             if (!jdbc.sql("SELECT EXISTS(SELECT 1 FROM role WHERE code=:role)").param("role", role.getValue())
-                    .query(Boolean.class).single()) throw bad("Unknown role");
+                    .query(Boolean.class).single()) throw bad("Vai trò không tồn tại");
         }
         if (!new HashSet<>(before.getRoles()).equals(roles)) {
             jdbc.sql("DELETE FROM user_role WHERE user_id=:id").param("id", id).update();
@@ -126,9 +160,9 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
     public ResponseEntity<AdminUserCreated> adminCreateUser(AdminCreateUserRequest request) {
         authorizeMutation();
         String email = AuthService.normalizeEmail(request.getEmail());
-        if (email == null) throw bad("Invalid email");
+        if (email == null) throw bad("Email không hợp lệ");
         Set<Role> requested = request.getRoles();
-        if (requested != null && requested.stream().anyMatch(Objects::isNull)) throw bad("Invalid roles");
+        if (requested != null && requested.stream().anyMatch(Objects::isNull)) throw bad("Vai trò không hợp lệ");
         Set<Role> roles = requested == null || requested.isEmpty() ? Set.of(Role.MEMBER) : requested;
         String name = request.getDisplayName() == null || request.getDisplayName().isBlank()
                 ? "Thành viên" : request.getDisplayName().trim();
@@ -153,13 +187,16 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
         current.requireActive();
         current.requireRole("SUPER_ADMIN");
         AdminUser base = jdbc.sql("SELECT * FROM app_user WHERE id=:id").param("id", userId).query(this::mapUser)
-                .optional().orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found"));
+                .optional().orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tài khoản"));
         var login = insights.loginSummary(userId);
         return ResponseEntity.ok(new AdminUserDetail(base.getId(), base.getEmail(), base.getDisplayName(), base.getRoles(),
                 base.getStatus())
                 .avatarUrl(base.getAvatarUrl())
                 .createdAt(base.getCreatedAt())
                 .lockedReason(base.getLockedReason())
+                .deletionRequestedAt(base.getDeletionRequestedAt())
+                .scheduledDeletionAt(base.getScheduledDeletionAt())
+                .deletedAt(base.getDeletedAt())
                 .mfaEnrolled(login.mfaEnrolled())
                 .lastLoginAt(login.lastLoginAt())
                 .lastSeenAt(login.lastSeenAt())
@@ -181,7 +218,7 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
         current.requireRole("SUPER_ADMIN");
         requireExists(userId);
         int p = page == null ? 0 : page, s = size == null ? 20 : size;
-        if (p < 0 || s < 1 || s > 100) throw bad("Invalid pagination");
+        if (p < 0 || s < 1 || s > 100) throw bad("Tham số phân trang không hợp lệ");
         return ResponseEntity.ok(insights.sessions(userId, p, s));
     }
 
@@ -206,9 +243,16 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
         return ResponseEntity.ok(insights.activity(userId));
     }
 
+    /** Tài khoản chờ xóa hoặc đã xóa không khóa/mở/đổi vai trò được: khôi phục trước (chờ xóa) hoặc không làm gì (đã xóa). */
+    private static void requireChangeable(AdminUser user) {
+        if (user.getStatus() == UserStatus.DELETION_REQUESTED)
+            throw conflict("Tài khoản đang chờ xóa theo yêu cầu của người dùng. Khôi phục tài khoản trước khi thay đổi.");
+        if (user.getStatus() == UserStatus.DELETED) throw conflict("Tài khoản đã bị xóa");
+    }
+
     private void requireExists(UUID id) {
         if (!jdbc.sql("SELECT EXISTS(SELECT 1 FROM app_user WHERE id=:id)").param("id", id).query(Boolean.class).single())
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found");
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tài khoản");
     }
 
     private void authorizeMutation() {
@@ -220,14 +264,14 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
         if (!jdbc.sql("SELECT EXISTS(SELECT 1 FROM app_user u JOIN user_role r ON r.user_id=u.id "
                 + "WHERE u.id=:id AND u.status='ACTIVE' AND r.role_code='SUPER_ADMIN')")
                 .param("id", current.id()).query(Boolean.class).single())
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Active SUPER_ADMIN required");
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Cần quản trị viên đang hoạt động");
     }
 
     private void protectLastAdmin(AdminUser user, boolean keepsSuperAdmin) {
         if (keepsSuperAdmin || user.getStatus() != UserStatus.ACTIVE || !user.getRoles().contains(Role.SUPER_ADMIN)) return;
         long count = jdbc.sql("SELECT count(*) FROM app_user u JOIN user_role r ON r.user_id=u.id "
                 + "WHERE u.status='ACTIVE' AND r.role_code='SUPER_ADMIN'").query(Long.class).single();
-        if (count <= 1) throw conflict("Cannot remove the last active SUPER_ADMIN");
+        if (count <= 1) throw conflict("Không thể bỏ quyền quản trị viên cuối cùng đang hoạt động");
     }
 
     private void revoke(UUID id, String email) {
@@ -243,11 +287,11 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
         jdbc.sql("SELECT pg_advisory_xact_lock(hashtext(:key))").param("key", "account-id:" + id)
                 .query((rs, n) -> true).single();
         String email = jdbc.sql("SELECT email FROM app_user WHERE id=:id").param("id", id).query(String.class).optional()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found"));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tài khoản"));
         jdbc.sql("SELECT pg_advisory_xact_lock(hashtext(:key))").param("key", "account:" + email.toLowerCase(Locale.ROOT))
                 .query((rs, n) -> true).single();
         if (jdbc.sql("SELECT id FROM app_user WHERE id=:id FOR UPDATE").param("id", id).query(UUID.class).optional().isEmpty())
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found");
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy tài khoản");
         return user(id);
     }
 
@@ -261,11 +305,15 @@ public class AdminAccountsDelegate implements AdminUsersApiDelegate {
                 .param("id", id).query(String.class).list().stream().map(Role::fromValue).toList();
         return new AdminUser(id, rs.getString("email"), rs.getString("display_name"), roles,
                 UserStatus.fromValue(rs.getString("status"))).createdAt(rs.getObject("created_at", OffsetDateTime.class))
-                .lockedReason(rs.getString("locked_reason"));
+                .lockedReason(rs.getString("locked_reason"))
+                .deletionRequestedAt(rs.getObject("deletion_requested_at", OffsetDateTime.class))
+                .scheduledDeletionAt(rs.getObject("deletion_requested_at", OffsetDateTime.class) == null ? null
+                        : rs.getObject("deletion_requested_at", OffsetDateTime.class).plusDays(graceDays))
+                .deletedAt(rs.getObject("deleted_at", OffsetDateTime.class));
     }
 
     private static String reason(String value) {
-        if (value == null || value.isBlank() || value.length() > 1000) throw bad("A nonblank reason of at most 1000 characters is required");
+        if (value == null || value.isBlank() || value.length() > 1000) throw bad("Cần ghi lý do (tối đa 1000 ký tự)");
         return value.trim();
     }
     private static ResponseStatusException bad(String message) { return new ResponseStatusException(HttpStatus.BAD_REQUEST, message); }

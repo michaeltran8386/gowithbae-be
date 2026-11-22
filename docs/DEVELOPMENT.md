@@ -285,7 +285,7 @@ cd gowithbae-be/docker
 copy .env.example .env
 ```
 
-Mở `docker/.env`, điền `DB_PASSWORD` và `JWT_SECRET` (`openssl rand -base64 48`). Nếu thư mục frontend không tên `gowithbae-fe` thì đặt `FE_DIR`, ví dụ `FE_DIR=../../web`. File `.env` này không commit.
+Mở `docker/.env`, điền `GWB_DB_PASSWORD` và `JWT_SECRET` (`openssl rand -base64 48`). Nếu thư mục frontend không tên `gowithbae-fe` thì đặt `FE_DIR`, ví dụ `FE_DIR=../../web`. File `.env` này không commit.
 
 ```powershell
 docker compose up -d --build
@@ -301,6 +301,8 @@ Dữ liệu demo (chạy một lần sau khi backend đã lên):
 docker compose exec db psql -U gowithbae -d gowithbae -f /seed/dev-seed.sql
 ```
 
+Mật khẩu DB trong Docker dùng tên riêng `GWB_DB_PASSWORD`, không phải `DB_PASSWORD`: nếu Windows/shell đã đặt `DB_PASSWORD` (mật khẩu Supabase để chạy backend local), compose sẽ lấy biến đó thay cho `docker/.env` và Postgres trong Docker bị khởi tạo sai mật khẩu.
+
 ### 9.2 Lệnh thường dùng (chạy trong `gowithbae-be/docker`)
 
 | Việc | Lệnh |
@@ -312,7 +314,7 @@ docker compose exec db psql -U gowithbae -d gowithbae -f /seed/dev-seed.sql
 | Trạng thái | `docker compose ps` |
 | Xóa sạch dữ liệu | `docker compose down -v` (**mất DB và ảnh**) |
 
-Đang chạy 4 container cũ tạo bằng `docker run`: xóa container trước (`docker rm -f gwb-db gwb-mail gwb-api gwb-web`), dữ liệu vẫn còn vì compose dùng lại volume `gwb-dbdata`, `gwb-uploads`. Giữ đúng `DB_PASSWORD` và `JWT_SECRET` cũ trong `docker/.env`, nếu không backend không vào được DB và admin phải cài lại Authenticator.
+Đang chạy 4 container cũ tạo bằng `docker run`: xóa container trước (`docker rm -f gwb-db gwb-mail gwb-api gwb-web`), dữ liệu vẫn còn vì compose dùng lại volume `gwb-dbdata`, `gwb-uploads`. Giữ đúng mật khẩu DB cũ (`GWB_DB_PASSWORD`) và `JWT_SECRET` cũ trong `docker/.env`, nếu không backend không vào được DB và admin phải cài lại Authenticator.
 
 ### 9.3 Biến môi trường
 
@@ -375,6 +377,7 @@ Ngoài `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`, SMTP:
 | `SUPABASE_STORAGE_BUCKET` | `gowithbae-files` (mặc định, có thể bỏ) |
 | `APP_WEB_BASE_URL` | `https://gowithbae.vercel.app` (link kích hoạt admin, link mời xem kế hoạch) |
 | `APP_INVITE_BASE_URL` | `https://gowithbae.vercel.app/invite` (link mời cùng chọn, phải kèm `/invite`) |
+| `ACCOUNT_DELETION_GRACE_DAYS` | Số ngày giữ tài khoản đã yêu cầu xóa trước khi tự xóa, mặc định `30` (có thể bỏ) |
 | `MAIL_PROVIDER` | `brevo`. **Bắt buộc trên Render free**: gói này chặn cổng SMTP (25/465/587), để `smtp` thì OTP báo "Chưa gửi được email" |
 | `BREVO_API_KEY` | API key của Brevo (bên dưới). Không đưa ra frontend |
 | `SMTP_FROM` | Email người gửi **đã xác minh** trong Brevo, vd. Gmail của nhóm |
