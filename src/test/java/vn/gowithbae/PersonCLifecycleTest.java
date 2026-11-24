@@ -205,7 +205,7 @@ class PersonCLifecycleTest {
     }
 
     @Test
-    void concurrentJoinsLetExactlyOneRecipientIn() throws Exception {
+    void concurrentJoinsAllGetIn() throws Exception {
         String[] s = createSession();
         int threads = 6;
         ExecutorService pool = Executors.newFixedThreadPool(threads);
@@ -226,10 +226,10 @@ class PersonCLifecycleTest {
         }
         pool.shutdown();
 
-        assertThat(statuses).filteredOn(code -> code == 200).hasSize(1);
-        assertThat(statuses).filteredOn(code -> code != 200).containsOnly(409);
+        // CR-002: không giới hạn số người được mời.
+        assertThat(statuses).containsOnly(200);
         assertThat(jdbc.sql("SELECT count(*) FROM recipient_session WHERE session_id = CAST(:s AS uuid) AND revoked_at IS NULL")
-                .param("s", s[0]).query(Long.class).single()).isEqualTo(1L);
+                .param("s", s[0]).query(Long.class).single()).isEqualTo((long) threads);
     }
 
     // ───────────── Giờ mở cửa khớp bộ lọc tìm kiếm ─────────────

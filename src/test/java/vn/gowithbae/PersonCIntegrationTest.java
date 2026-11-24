@@ -152,10 +152,17 @@ class PersonCIntegrationTest {
         String guestSession = objectMapper.readTree(joinRes.getResponse().getContentAsString())
                 .get("recipientSession").asText();
 
-        mvc.perform(post("/api/v1/share-grants/{token}/join", inviteToken)
+        String secondGuest = objectMapper.readTree(mvc.perform(post("/api/v1/share-grants/{token}/join", inviteToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"displayName\":\"Người thứ 2\"}"))
-                .andExpect(status().isConflict());
+                .andExpect(status().isOk()) // CR-002: không giới hạn số người được mời
+                .andReturn().getResponse().getContentAsString()).get("recipientSession").asText();
+        // "Cùng thích" = mọi người tham gia đều Thích, nên người thứ 2 cũng bầu.
+        mvc.perform(put("/api/v1/choice-sessions/{sid}/votes/{cid}", sessionId, candidateOpenId)
+                        .header("X-Recipient-Session", secondGuest)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"preference\":\"LIKE\"}"))
+                .andExpect(status().isNoContent());
 
         mvc.perform(put("/api/v1/choice-sessions/{sid}/votes/{cid}", sessionId, candidateOpenId)
                         .header("Authorization", "Bearer " + ownerToken)

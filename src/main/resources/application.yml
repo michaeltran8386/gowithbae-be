@@ -46,6 +46,10 @@ app:
       api-key: ${BREVO_API_KEY:}
   auth:
     mfa-key: ${AUTH_MFA_KEY:${app.jwt.secret}}
+    # Google OAuth Client ID (loại Web application). Công khai, không phải secret; frontend dùng cùng giá trị (VITE_GOOGLE_CLIENT_ID).
+    google-client-id: ${GOOGLE_CLIENT_ID:796222079602-49c170r0o3v2r24724eu0njjbi1i69uf.apps.googleusercontent.com}
+    # CR-002: thành viên chỉ đăng nhập Google. Bật lại mã email cho thành viên bằng AUTH_MEMBER_OTP_ENABLED=true.
+    member-otp-enabled: ${AUTH_MEMBER_OTP_ENABLED:false}
   accounts:
     # Tài khoản yêu cầu xóa mà quản trị viên không khôi phục sẽ tự bị xóa (ẩn danh hóa) sau số ngày này.
     deletion-grace-days: ${ACCOUNT_DELETION_GRACE_DAYS:30}
