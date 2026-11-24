@@ -163,7 +163,9 @@ class PersonCSecurityAndValidationTest {
         mvc.perform(post("/api/v1/choice-sessions")
                         .with(jwt().authorities(new SimpleGrantedAuthority("ROLE_MEMBER")))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"placeIds\":[\"" + UUID.randomUUID() + "\"]}"))
+                        // CR-002: hợp đồng chỉ còn giới hạn tối đa 5 (tối thiểu kiểm tra ở service) → gửi 6 nơi.
+                        .content("{\"placeIds\":[" + java.util.stream.Stream.generate(() -> "\"" + UUID.randomUUID() + "\"")
+                                .limit(6).collect(java.util.stream.Collectors.joining(",")) + "]}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors").isArray())
                 .andExpect(jsonPath("$.errors[0].field").exists());

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: GoWithBae G1 API
-  version: 0.6.0
+  version: 0.7.0
   description: |
     API contract cho GoWithBae G1 (web khách hàng + quản trị nội bộ).
     Nguồn yêu cầu: `GWB-REQ-G1` v1.1 (15-11-2026), SRS hợp nhất v1.2 và CR-001.
@@ -315,6 +315,31 @@ paths:
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/google:
+    post:
+      tags: [Auth]
+      operationId: loginWithGoogle
+      summary: Đăng nhập bằng Google ID token; tạo tài khoản thành viên nếu chưa có (CR-002)
+      description: 'Xác minh chữ ký Google, `aud` = Client ID cấu hình và `email_verified`. Tài khoản có email trùng được gộp. Tài khoản nội bộ (staff) không đăng nhập bằng Google: trả 403 `STAFF_USE_ADMIN_LOGIN`.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idToken]
+              properties:
+                idToken: { type: string, minLength: 1, maxLength: 4096 }
+      responses:
+        default: { $ref: '#/components/responses/StandardError' }
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthToken' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /auth/logout:
     post:
       tags: [Auth]
@@ -611,7 +636,7 @@ paths:
     post:
       tags: [ChoiceSessions]
       operationId: createChoiceSession
-      summary: Tạo phiên cùng chọn từ 2–5 địa điểm đã lưu, sinh link mời (FR-10, RULE-08)
+      summary: Tạo phiên cùng chọn gắn với một danh sách (listId, cập nhật theo danh sách) hoặc từ 2–5 địa điểm đã lưu (placeIds, cách cũ); sinh link mời (FR-10, RULE-08, CR-002)
       x-status: draft
       x-oq: [OQ-07, OQ-11]
       security: [{ bearerAuth: [] }]
@@ -622,11 +647,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [placeIds]
               properties:
+                listId: { type: string, format: uuid, description: 'Danh sách của chính người tạo; phải có ít nhất 1 nơi. Nơi thêm/xóa sau này tự cập nhật vào phiên.' }
                 placeIds:
                   type: array
-                  minItems: 2
+                  description: 'Cách cũ: 2–5 địa điểm khác nhau. Không đặt minItems vì code sinh ra khởi tạo mảng rỗng khi chỉ gửi listId; tối thiểu kiểm tra ở server.'
                   maxItems: 5
                   uniqueItems: true
                   items: { type: string, format: uuid }
@@ -2759,6 +2784,8 @@ components:
         name: { type: string }
         placeCount: { type: integer }
         createdAt: { type: string, format: date-time }
+        isDefault: { type: boolean, description: 'true = danh sách "Đã lưu" (nút tim); không đổi tên/xóa được' }
+        activeChoiceSessionId: { type: string, format: uuid, nullable: true, description: 'Phiên cùng chọn chưa chốt gắn với danh sách này' }
     SavedListDetail:
       allOf:
         - $ref: '#/components/schemas/SavedListSummary'
@@ -2796,8 +2823,9 @@ components:
         partnerVote:
           allOf: [{ $ref: '#/components/schemas/VotePreference' }]
           nullable: true
-          description: Có được thấy phiếu riêng của nhau không — OQ-07
-        mutualLike: { type: boolean }
+          description: Có được thấy phiếu riêng của nhau không — OQ-07. Với nhiều người tham gia, là phiếu của người tham gia đầu tiên.
+        mutualLike: { type: boolean, description: 'Mọi người tham gia (người tạo + tất cả người được mời đang hoạt động) đều Thích' }
+        likeCount: { type: integer, nullable: true, description: 'Số người Thích. Người tạo luôn thấy; người được mời chỉ thấy sau khi chốt.' }
     ChoiceSession:
       type: object
       required: [id, status, viewerRole, candidates, createdAt]
@@ -2806,11 +2834,14 @@ components:
         status: { $ref: '#/components/schemas/ChoiceSessionStatus' }
         viewerRole: { type: string, enum: [CREATOR, RECIPIENT] }
         creatorName: { type: string }
-        recipientName: { type: string, nullable: true }
+        recipientName: { type: string, nullable: true, description: 'Tên các người được mời, nối bằng dấu phẩy' }
+        participantNames:
+          type: array
+          description: Tên hiển thị của mọi người được mời đang hoạt động, theo thứ tự tham gia
+          items: { type: string }
+        listId: { type: string, format: uuid, nullable: true, description: 'Danh sách nguồn khi phiên cập nhật theo danh sách' }
         candidates:
           type: array
-          minItems: 2
-          maxItems: 5
           items: { $ref: '#/components/schemas/ChoiceCandidate' }
         activeShareGrant: { $ref: '#/components/schemas/ShareGrant' }
         datePlanId: { type: string, format: uuid, nullable: true }
@@ -2848,7 +2879,7 @@ components:
           type: array
           description: Chỉ nội dung được chia sẻ; xem trước không chiếm suất hoặc bắt nhập tên.
           items: { $ref: '#/components/schemas/PlaceCard' }
-        slotAvailable: { type: boolean }
+        slotAvailable: { type: boolean, description: 'Không giới hạn số người: true khi phiên chưa chốt' }
         expiresAt: { type: string, format: date-time }
     RecipientSessionToken:
       type: object

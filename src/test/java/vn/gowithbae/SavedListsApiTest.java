@@ -104,14 +104,15 @@ class SavedListsApiTest {
     void emptyListAndRenameWorkAndOnlyOwnerSeesIt() throws Exception {
         UUID id = create();
         mvc.perform(get("/api/v1/saved-lists").header("Authorization", "Bearer " + otherToken))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].isDefault").value(true)); // chỉ có danh sách "Đã lưu" tự tạo
         mvc.perform(get("/api/v1/saved-lists/{id}", id).header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.items.length()").value(0));
         mvc.perform(patch("/api/v1/saved-lists/{id}", id).header("Authorization", "Bearer " + token)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"Renamed\"}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.name").value("Renamed"));
         mvc.perform(get("/api/v1/saved-lists").header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk()).andExpect(jsonPath("$[0].name").value("Renamed"));
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].isDefault").value(true)).andExpect(jsonPath("$[1].name").value("Renamed"));
     }
 
     @Test

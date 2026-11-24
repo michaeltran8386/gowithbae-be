@@ -77,7 +77,7 @@ public class ChoiceSessionService {
         UserPrincipal creator = actorResolver.requireActiveUser();
         List<SessionRow> rows = jdbc.sql("""
                 SELECT cs.id, cs.creator_id, u.display_name AS creator_name, cs.status, cs.created_at, cs.finalized_at,
-                       dp.id AS date_plan_id
+                       dp.id AS date_plan_id, cs.list_id
                 FROM choice_session cs
                 JOIN app_user u ON u.id = cs.creator_id
                 LEFT JOIN date_plan dp ON dp.choice_session_id = cs.id
@@ -110,6 +110,9 @@ public class ChoiceSessionService {
     }
 
     private ChoiceSessionCreated createChoiceSessionInternal(UserPrincipal creator, CreateChoiceSessionRequest req) {
+        if (req.getListId() != null) {
+            return createFromList(creator, req.getListId());
+        }
         Set<UUID> placeIds = req.getPlaceIds();
         if (placeIds == null || placeIds.size() < 2 || placeIds.size() > 5) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phiên cùng chọn phải gồm 2 đến 5 địa điểm khác nhau");
@@ -180,8 +183,125 @@ public class ChoiceSessionService {
                 .finalizedAt(null);
     }
 
+    /**
+     * Phiên gắn với danh sách (CR-002): không giới hạn số nơi, lựa chọn tự đồng bộ khi chủ danh sách thêm/bớt nơi.
+     * Mỗi danh sách chỉ có một phiên chưa chốt để link mời luôn trỏ về cùng một chỗ.
+     */
+    private ChoiceSessionCreated createFromList(UserPrincipal creator, UUID listId) {
+        Boolean owned = jdbc.sql("""
+                SELECT EXISTS (SELECT 1 FROM saved_list WHERE id = :lid AND owner_id = :uid)
+                """)
+                .param("lid", listId)
+                .param("uid", creator.userId())
+                .query(Boolean.class)
+                .single();
+        if (!Boolean.TRUE.equals(owned)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy danh sách");
+        }
+        // Khóa danh sách để hai yêu cầu tạo phiên đồng thời không sinh hai phiên.
+        jdbc.sql("SELECT id FROM saved_list WHERE id = :lid FOR UPDATE").param("lid", listId).query(UUID.class).single();
+        Optional<UUID> existing = jdbc.sql("""
+                SELECT id FROM choice_session WHERE list_id = :lid AND status <> 'FINALIZED'
+                ORDER BY created_at DESC LIMIT 1
+                """)
+                .param("lid", listId)
+                .query(UUID.class)
+                .optional();
+        if (existing.isPresent()) {
+            throw vn.gowithbae.common.web.Problems.status(
+                    HttpStatus.CONFLICT,
+                    "LIST_HAS_ACTIVE_SESSION",
+                    "Danh sách này đang có phiên cùng chọn chưa chốt");
+        }
+        List<UUID> listPlaceIds = jdbc.sql("SELECT place_id FROM saved_list_item WHERE list_id = :lid")
+                .param("lid", listId)
+                .query(UUID.class)
+                .list();
+        boolean anyPublished = placeCatalogService.findPlaces(Set.copyOf(listPlaceIds)).values().stream()
+                .anyMatch(PlaceSummary::isPublished);
+        if (!anyPublished) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Danh sách cần có ít nhất 1 địa điểm đang hoạt động");
+        }
+
+        UUID sessionId = jdbc.sql("""
+                INSERT INTO choice_session(creator_id, status, list_id)
+                VALUES (:creatorId, 'WAITING', :lid)
+                RETURNING id
+                """)
+                .param("creatorId", creator.userId())
+                .param("lid", listId)
+                .query(UUID.class)
+                .single();
+        syncCandidatesFromList(sessionId);
+
+        ShareGrantCreated grantCreated = issueGrantInternal(sessionId);
+        ChoiceSession view = assembleChoiceSession(loadSessionRow(sessionId), ChoiceSession.ViewerRoleEnum.CREATOR, null);
+        return new ChoiceSessionCreated(
+                view.getId(),
+                view.getStatus(),
+                ChoiceSessionCreated.ViewerRoleEnum.CREATOR,
+                view.getCandidates(),
+                view.getCreatedAt(),
+                grantCreated)
+                .creatorName(view.getCreatorName())
+                .recipientName(null)
+                .participantNames(List.of())
+                .listId(listId)
+                .activeShareGrant(new ShareGrant(grantCreated.getId(), grantCreated.getExpiresAt(), ShareGrant.StatusEnum.VALID))
+                .datePlanId(null)
+                .finalizedAt(null);
+    }
+
+    /**
+     * Đồng bộ lựa chọn với danh sách nguồn: nơi mới được thêm (chưa ai bầu), nơi bị bỏ khỏi danh sách chỉ bị ẩn
+     * (active = false) để phiếu cũ giữ nguyên nghĩa; thêm lại thì hiện lại cùng phiếu. Phiên đã chốt không đổi.
+     */
+    private void syncCandidatesFromList(UUID sessionId) {
+        jdbc.sql("""
+                INSERT INTO choice_candidate(session_id, place_id, sort_order, active)
+                SELECT cs.id, i.place_id,
+                       COALESCE((SELECT max(sort_order) FROM choice_candidate WHERE session_id = cs.id), -1)
+                           + row_number() OVER (ORDER BY i.added_at, i.place_id),
+                       true
+                FROM choice_session cs
+                JOIN saved_list_item i ON i.list_id = cs.list_id
+                WHERE cs.id = :sid AND cs.status <> 'FINALIZED'
+                  AND NOT EXISTS (SELECT 1 FROM choice_candidate c WHERE c.session_id = cs.id AND c.place_id = i.place_id)
+                ON CONFLICT (session_id, place_id) DO NOTHING
+                """)
+                .param("sid", sessionId)
+                .update();
+        jdbc.sql("""
+                UPDATE choice_candidate c SET active = EXISTS (
+                    SELECT 1 FROM saved_list_item i WHERE i.list_id = cs.list_id AND i.place_id = c.place_id)
+                FROM choice_session cs
+                WHERE cs.id = c.session_id AND cs.id = :sid AND cs.status <> 'FINALIZED' AND cs.list_id IS NOT NULL
+                  AND c.active <> EXISTS (
+                    SELECT 1 FROM saved_list_item i WHERE i.list_id = cs.list_id AND i.place_id = c.place_id)
+                """)
+                .param("sid", sessionId)
+                .update();
+    }
+
+    private SessionRow loadSessionRow(UUID sessionId) {
+        return jdbc.sql("""
+                SELECT cs.id, cs.creator_id, u.display_name AS creator_name, cs.status, cs.created_at, cs.finalized_at,
+                       dp.id AS date_plan_id, cs.list_id
+                FROM choice_session cs
+                JOIN app_user u ON u.id = cs.creator_id
+                LEFT JOIN date_plan dp ON dp.choice_session_id = cs.id
+                WHERE cs.id = :sid
+                """)
+                .param("sid", sessionId)
+                .query((rs, rowNum) -> mapSessionRow(rs))
+                .optional()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy phiên cùng chọn"));
+    }
+
+    @Transactional
     public ChoiceSession getChoiceSession(UUID sessionId) {
         SessionViewerAccess access = resolveViewerAccess(sessionId);
+        syncCandidatesFromList(sessionId);
         return assembleChoiceSession(access.session(), access.viewerRole(), access.recipientSessionId());
     }
 
@@ -202,10 +322,11 @@ public class ChoiceSessionService {
         if ("FINALIZED".equals(currentStatus)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Phiên cùng chọn đã chốt, không thể thay đổi phiếu");
         }
+        syncCandidatesFromList(sessionId);
 
         Boolean candidateInSession = jdbc.sql("""
                 SELECT EXISTS (
-                    SELECT 1 FROM choice_candidate WHERE id = :cid AND session_id = :sid
+                    SELECT 1 FROM choice_candidate WHERE id = :cid AND session_id = :sid AND active
                 )
                 """)
                 .param("cid", candidateId)
@@ -282,9 +403,10 @@ public class ChoiceSessionService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Phiên cùng chọn đã được chốt trước đó");
         }
 
+        syncCandidatesFromList(sessionId);
         UUID placeId = jdbc.sql("""
                 SELECT place_id FROM choice_candidate
-                WHERE id = :cid AND session_id = :sid
+                WHERE id = :cid AND session_id = :sid AND active
                 """)
                 .param("cid", req.getCandidateId())
                 .param("sid", sessionId)
@@ -297,6 +419,8 @@ public class ChoiceSessionService {
         UUID activeRecipientId = jdbc.sql("""
                 SELECT id FROM recipient_session
                 WHERE session_id = :sid AND revoked_at IS NULL
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1
                 """)
                 .param("sid", sessionId)
                 .query(UUID.class)
@@ -405,8 +529,10 @@ public class ChoiceSessionService {
         }
     }
 
+    @Transactional
     public ShareGrantPreview previewShareGrant(String inviteToken) {
         GrantLookup grant = findUsableGrantOrThrow410(inviteToken);
+        syncCandidatesFromList(grant.sessionId());
         boolean slotAvailable = isSlotAvailable(grant.sessionId(), grant.sessionStatus());
         List<PlaceCard> cards = loadCandidateCards(grant.sessionId());
         return new ShareGrantPreview(grant.creatorName(), cards.size(), cards, slotAvailable)
@@ -432,18 +558,7 @@ public class ChoiceSessionService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Phiên cùng chọn đã được chốt");
         }
 
-        Boolean hasActiveRecipient = jdbc.sql("""
-                SELECT EXISTS (
-                    SELECT 1 FROM recipient_session WHERE session_id = :sid AND revoked_at IS NULL
-                )
-                """)
-                .param("sid", grant.sessionId())
-                .query(Boolean.class)
-                .single();
-        if (Boolean.TRUE.equals(hasActiveRecipient)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Suất người nhận của phiên này đã có người tham gia");
-        }
-
+        // CR-002: không giới hạn số người được mời; mỗi lần tham gia là một phiên người nhận riêng.
         String rawSessionToken = TokenHashUtil.generateOpaqueToken();
         String sessionHash = TokenHashUtil.sha256Hex(rawSessionToken);
         jdbc.sql("""
@@ -521,22 +636,13 @@ public class ChoiceSessionService {
     }
 
     private boolean isSlotAvailable(UUID sessionId, String sessionStatus) {
-        if ("FINALIZED".equals(sessionStatus)) {
-            return false;
-        }
-        Boolean exists = jdbc.sql("""
-                SELECT EXISTS (SELECT 1 FROM recipient_session WHERE session_id = :sid AND revoked_at IS NULL)
-                """)
-                .param("sid", sessionId)
-                .query(Boolean.class)
-                .single();
-        return !Boolean.TRUE.equals(exists);
+        return !"FINALIZED".equals(sessionStatus);
     }
 
     private List<PlaceCard> loadCandidateCards(UUID sessionId) {
         List<UUID> placeIds = jdbc.sql("""
                 SELECT place_id FROM choice_candidate
-                WHERE session_id = :sid
+                WHERE session_id = :sid AND active
                 ORDER BY sort_order ASC
                 """)
                 .param("sid", sessionId)
@@ -558,26 +664,25 @@ public class ChoiceSessionService {
             ChoiceSession.ViewerRoleEnum viewerRole,
             @Nullable UUID currentRecipientId) {
 
-        Optional<ActiveRecipient> activeRecipient = jdbc.sql("""
+        List<ActiveRecipient> recipients = jdbc.sql("""
                 SELECT id, display_name
                 FROM recipient_session
                 WHERE session_id = :sid AND revoked_at IS NULL
+                ORDER BY created_at ASC, id ASC
                 """)
                 .param("sid", session.id())
                 .query((rs, rowNum) -> new ActiveRecipient(
                         rs.getObject("id", UUID.class),
                         rs.getString("display_name")))
-                .optional();
-
-        UUID targetRecipientId = currentRecipientId != null
-                ? currentRecipientId
-                : activeRecipient.map(ActiveRecipient::id).orElse(null);
+                .list();
+        Set<UUID> activeRecipientIds = recipients.stream().map(ActiveRecipient::id).collect(java.util.stream.Collectors.toSet());
+        UUID firstRecipientId = recipients.isEmpty() ? null : recipients.get(0).id();
 
         List<CandidateRow> candidateRows = jdbc.sql("""
                 SELECT id, place_id
                 FROM choice_candidate
-                WHERE session_id = :sid
-                ORDER BY sort_order ASC
+                WHERE session_id = :sid AND active
+                ORDER BY sort_order ASC, id ASC
                 """)
                 .param("sid", session.id())
                 .query((rs, rowNum) -> new CandidateRow(
@@ -589,7 +694,8 @@ public class ChoiceSessionService {
         Map<UUID, PlaceSummary> places = placeCatalogService.findPlaces(placeIds);
 
         Map<UUID, VotePreference> creatorVotes = new LinkedHashMap<>();
-        Map<UUID, VotePreference> recipientVotes = new LinkedHashMap<>();
+        // candidateId -> (recipientSessionId -> phiếu), chỉ tính người được mời còn hoạt động.
+        Map<UUID, Map<UUID, VotePreference>> recipientVotes = new LinkedHashMap<>();
         if (!candidateRows.isEmpty()) {
             jdbc.sql("""
                     SELECT candidate_id, voter_user_id, voter_recipient_id, preference
@@ -604,13 +710,15 @@ public class ChoiceSessionService {
                         UUID voterRecipient = rs.getObject("voter_recipient_id", UUID.class);
                         if (session.creatorId().equals(voterUser)) {
                             creatorVotes.put(cid, pref);
-                        } else if (targetRecipientId != null && targetRecipientId.equals(voterRecipient)) {
-                            recipientVotes.put(cid, pref);
+                        } else if (voterRecipient != null
+                                && (activeRecipientIds.contains(voterRecipient) || voterRecipient.equals(currentRecipientId))) {
+                            recipientVotes.computeIfAbsent(cid, k -> new LinkedHashMap<>()).put(voterRecipient, pref);
                         }
                     });
         }
 
         boolean finalized = "FINALIZED".equals(session.status());
+        boolean isCreator = viewerRole == ChoiceSession.ViewerRoleEnum.CREATOR;
         List<ChoiceCandidate> candidates = new ArrayList<>(candidateRows.size());
         for (CandidateRow c : candidateRows) {
             PlaceSummary place = places.get(c.placeId());
@@ -618,19 +726,26 @@ public class ChoiceSessionService {
                 continue;
             }
             VotePreference creatorVote = creatorVotes.get(c.id());
-            VotePreference recipientVote = recipientVotes.get(c.id());
-            VotePreference myVote = viewerRole == ChoiceSession.ViewerRoleEnum.CREATOR ? creatorVote : recipientVote;
-            VotePreference rawPartnerVote = viewerRole == ChoiceSession.ViewerRoleEnum.CREATOR ? recipientVote : creatorVote;
+            Map<UUID, VotePreference> byRecipient = recipientVotes.getOrDefault(c.id(), Collections.emptyMap());
+            VotePreference myVote = isCreator ? creatorVote : byRecipient.get(currentRecipientId);
+            VotePreference rawPartnerVote = isCreator
+                    ? (firstRecipientId == null ? null : byRecipient.get(firstRecipientId))
+                    : creatorVote;
             // OQ-07 (đã chốt với user): ẩn partnerVote trước khi chốt; chỉ hiển thị sau khi FINALIZED.
             VotePreference visiblePartnerVote = finalized ? rawPartnerVote : null;
-            boolean mutualLike = creatorVote == VotePreference.LIKE && recipientVote == VotePreference.LIKE;
+            int likeCount = (creatorVote == VotePreference.LIKE ? 1 : 0)
+                    + (int) recipients.stream().filter(r -> byRecipient.get(r.id()) == VotePreference.LIKE).count();
+            boolean mutualLike = creatorVote == VotePreference.LIKE && !recipients.isEmpty()
+                    && recipients.stream().allMatch(r -> byRecipient.get(r.id()) == VotePreference.LIKE);
 
             candidates.add(new ChoiceCandidate(c.id(), place.card(), place.isPublished())
                     .myVote(myVote)
                     .partnerVote(visiblePartnerVote)
-                    .mutualLike(mutualLike));
+                    .mutualLike(mutualLike)
+                    .likeCount(isCreator || finalized ? likeCount : null));
         }
 
+        List<String> participantNames = recipients.stream().map(ActiveRecipient::displayName).toList();
         ShareGrant activeGrant = viewerRole == ChoiceSession.ViewerRoleEnum.CREATOR
                 ? loadLatestShareGrant(session.id()).orElse(null)
                 : null;
@@ -642,7 +757,9 @@ public class ChoiceSessionService {
                 candidates,
                 session.createdAt())
                 .creatorName(session.creatorName())
-                .recipientName(activeRecipient.map(ActiveRecipient::displayName).orElse(null))
+                .recipientName(participantNames.isEmpty() ? null : String.join(", ", participantNames))
+                .participantNames(participantNames)
+                .listId(session.listId())
                 .activeShareGrant(activeGrant)
                 .datePlanId(session.datePlanId())
                 .finalizedAt(session.finalizedAt());
@@ -675,7 +792,7 @@ public class ChoiceSessionService {
 
         Optional<SessionRow> rowOpt = jdbc.sql("""
                 SELECT cs.id, cs.creator_id, u.display_name AS creator_name, cs.status, cs.created_at, cs.finalized_at,
-                       dp.id AS date_plan_id
+                       dp.id AS date_plan_id, cs.list_id
                 FROM choice_session cs
                 JOIN app_user u ON u.id = cs.creator_id
                 LEFT JOIN date_plan dp ON dp.choice_session_id = cs.id
@@ -735,7 +852,8 @@ public class ChoiceSessionService {
                 rs.getString("status"),
                 TimeHelper.getOffsetDateTime(rs, "created_at"),
                 TimeHelper.getOffsetDateTime(rs, "finalized_at"),
-                rs.getObject("date_plan_id", UUID.class));
+                rs.getObject("date_plan_id", UUID.class),
+                rs.getObject("list_id", UUID.class));
     }
 
     private record SessionInsertRow(UUID id, OffsetDateTime createdAt) {}
@@ -747,7 +865,8 @@ public class ChoiceSessionService {
             String status,
             OffsetDateTime createdAt,
             @Nullable OffsetDateTime finalizedAt,
-            @Nullable UUID datePlanId) {}
+            @Nullable UUID datePlanId,
+            @Nullable UUID listId) {}
 
     private record CandidateRow(UUID id, UUID placeId) {}
 

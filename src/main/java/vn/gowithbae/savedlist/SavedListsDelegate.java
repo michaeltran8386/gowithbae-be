@@ -17,12 +17,14 @@ import vn.gowithbae.api.model.SavedListDetail;
 import vn.gowithbae.api.model.SavedListDetailAllOfItems;
 import vn.gowithbae.api.model.SavedListSummary;
 import vn.gowithbae.api.model.SavedListWrite;
+import vn.gowithbae.common.web.Problems;
 import vn.gowithbae.platform.CurrentUser;
 import vn.gowithbae.platform.PlaceQueryService;
 
 @Service
 @Transactional
 public class SavedListsDelegate implements SavedListsApiDelegate {
+    static final String DEFAULT_NAME = "Đã lưu";
     private final JdbcClient jdbc;
     private final CurrentUser user;
     private final ObjectProvider<PlaceQueryService> places;
@@ -42,7 +44,9 @@ public class SavedListsDelegate implements SavedListsApiDelegate {
     private SavedListSummary owned(UUID id) {
         // Serialize item mutations and deletion on the parent, including duplicate PUTs.
         return jdbc.sql("""
-                SELECT l.*, (SELECT count(*) FROM saved_list_item i WHERE i.list_id = l.id) AS place_count
+                SELECT l.*, (SELECT count(*) FROM saved_list_item i WHERE i.list_id = l.id) AS place_count,
+                       (SELECT cs.id FROM choice_session cs WHERE cs.list_id = l.id AND cs.status <> 'FINALIZED'
+                        ORDER BY cs.created_at DESC LIMIT 1) AS active_choice_session_id
                 FROM saved_list l WHERE l.id = :id AND l.owner_id = :owner FOR UPDATE OF l
                 """).param("id", id).param("owner", member()).query(this::summary).optional()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Saved list not found"));
@@ -50,7 +54,9 @@ public class SavedListsDelegate implements SavedListsApiDelegate {
 
     private SavedListSummary summary(ResultSet rs, int row) throws SQLException {
         return new SavedListSummary(rs.getObject("id", UUID.class), rs.getString("name"),
-                rs.getInt("place_count"), rs.getObject("created_at", OffsetDateTime.class));
+                rs.getInt("place_count"), rs.getObject("created_at", OffsetDateTime.class))
+                .isDefault(rs.getBoolean("is_default"))
+                .activeChoiceSessionId(rs.getObject("active_choice_session_id", UUID.class));
     }
 
     private String name(SavedListWrite body) {
@@ -70,12 +76,30 @@ public class SavedListsDelegate implements SavedListsApiDelegate {
         return service;
     }
 
+    /** Danh sách "Đã lưu" của nút tim (CR-002): tạo khi cần, mỗi người đúng một. */
+    private void ensureDefault(UUID owner) {
+        jdbc.sql("""
+                INSERT INTO saved_list(owner_id, name, is_default) VALUES (:owner, :name, true)
+                ON CONFLICT (owner_id) WHERE is_default DO NOTHING
+                """).param("owner", owner).param("name", DEFAULT_NAME).update();
+    }
+
+    private void rejectDefault(SavedListSummary list, String action) {
+        if (Boolean.TRUE.equals(list.getIsDefault())) {
+            throw Problems.status(HttpStatus.CONFLICT, "DEFAULT_LIST_LOCKED", "Không thể " + action + " danh sách “" + DEFAULT_NAME + "”");
+        }
+    }
+
     @Override
     public ResponseEntity<List<SavedListSummary>> listSavedLists() {
+        UUID owner = member();
+        ensureDefault(owner);
         return ResponseEntity.ok(jdbc.sql("""
-                SELECT l.*, (SELECT count(*) FROM saved_list_item i WHERE i.list_id = l.id) AS place_count
-                FROM saved_list l WHERE l.owner_id = :owner ORDER BY l.created_at DESC, l.id DESC
-                """).param("owner", member()).query(this::summary).list());
+                SELECT l.*, (SELECT count(*) FROM saved_list_item i WHERE i.list_id = l.id) AS place_count,
+                       (SELECT cs.id FROM choice_session cs WHERE cs.list_id = l.id AND cs.status <> 'FINALIZED'
+                        ORDER BY cs.created_at DESC LIMIT 1) AS active_choice_session_id
+                FROM saved_list l WHERE l.owner_id = :owner ORDER BY l.is_default DESC, l.created_at DESC, l.id DESC
+                """).param("owner", owner).query(this::summary).list());
     }
 
     @Override
@@ -83,7 +107,7 @@ public class SavedListsDelegate implements SavedListsApiDelegate {
         UUID owner = member();
         var result = jdbc.sql("""
                 INSERT INTO saved_list(owner_id, name) VALUES (:owner, :name)
-                RETURNING *, 0 AS place_count
+                RETURNING *, 0 AS place_count, NULL::uuid AS active_choice_session_id
                 """).param("owner", owner).param("name", name(body)).query(this::summary).single();
         return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
@@ -91,6 +115,7 @@ public class SavedListsDelegate implements SavedListsApiDelegate {
     @Override
     public ResponseEntity<SavedListSummary> renameSavedList(UUID id, SavedListWrite body) {
         var result = owned(id);
+        rejectDefault(result, "đổi tên");
         String name = name(body);
         jdbc.sql("UPDATE saved_list SET name = :name, updated_at = now() WHERE id = :id")
                 .param("name", name).param("id", id).update();
@@ -99,7 +124,7 @@ public class SavedListsDelegate implements SavedListsApiDelegate {
 
     @Override
     public ResponseEntity<Void> deleteSavedList(UUID id) {
-        owned(id);
+        rejectDefault(owned(id), "xóa");
         jdbc.sql("DELETE FROM saved_list WHERE id = :id").param("id", id).update();
         return ResponseEntity.noContent().build();
     }
@@ -119,7 +144,8 @@ public class SavedListsDelegate implements SavedListsApiDelegate {
                 return new SavedListDetailAllOfItems(saved.place(), saved.available(), item.addedAt());
             }).toList();
         }
-        return ResponseEntity.ok(new SavedListDetail(list.getId(), list.getName(), items.size(), list.getCreatedAt(), items));
+        return ResponseEntity.ok(new SavedListDetail(list.getId(), list.getName(), items.size(), list.getCreatedAt(), items)
+                .isDefault(list.getIsDefault()).activeChoiceSessionId(list.getActiveChoiceSessionId()));
     }
 
     @Override

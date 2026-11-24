@@ -52,7 +52,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, API + "/site-content", API + "/files/*").permitAll()
                 // Khách ẩn danh được gửi (có chống lạm dụng trong delegate)
                 .requestMatchers(HttpMethod.POST, API + "/places/*/reports", API + "/events", API + "/uploads").permitAll()
-                .requestMatchers(API + "/auth/otp/**", API + "/share-grants/**", API + "/plan-invites/**").permitAll()
+                .requestMatchers(API + "/auth/otp/**", API + "/auth/google", API + "/share-grants/**", API + "/plan-invites/**").permitAll()
                 // Link kích hoạt TOTP: bảo vệ bằng token dùng 1 lần do SUPER_ADMIN/bootstrap cấp
                 .requestMatchers(API + "/auth/mfa-activation/*").permitAll()
                 // Bearer HOẶC X-Recipient-Session: delegate bắt buộc kiểm tra một trong hai (RULE-12)

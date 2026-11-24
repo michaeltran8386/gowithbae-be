@@ -38,12 +38,13 @@ public class AuthService {
     private final JwtEncoder encoder;
     private final UserAccounts users;
     private final StaffMfa mfa;
+    private final GoogleIdTokenVerifier google;
     private final SecureRandom random=new SecureRandom();
 
     public AuthService(JdbcClient jdbc,TransactionTemplate tx,AuthPolicy policy,RequestRateLimiter limiter,
-            SecretHash hash,OtpDelivery delivery,JwtEncoder encoder,UserAccounts users,StaffMfa mfa) {
+            SecretHash hash,OtpDelivery delivery,JwtEncoder encoder,UserAccounts users,StaffMfa mfa,GoogleIdTokenVerifier google) {
         this.jdbc=jdbc;this.tx=tx;this.policy=policy;this.limiter=limiter;this.hash=hash;
-        this.delivery=delivery;this.encoder=encoder;this.users=users;this.mfa=mfa;
+        this.delivery=delivery;this.encoder=encoder;this.users=users;this.mfa=mfa;this.google=google;
     }
 
     private record Challenge(UUID id,String email,UUID userId,String codeHash,int attempts,
@@ -68,6 +69,7 @@ public class AuthService {
                 boolean unavailable=jdbc.sql("SELECT EXISTS(SELECT 1 FROM app_user WHERE lower(email)=:email AND status<>'ACTIVE')")
                         .param("email",email).query(Boolean.class).single();
                 if(unavailable) return; // Không tiết lộ tài khoản có tồn tại hoặc bị khóa.
+                if(!policy.memberOtpEnabled() && !isStaffEmail(email)) return; // CR-002: thành viên dùng Google.
             } else {
                 boolean taken=jdbc.sql("SELECT EXISTS(SELECT 1 FROM app_user WHERE lower(email)=:email AND id<>:id)")
                         .param("email",email).param("id",userId).query(Boolean.class).single();
@@ -99,6 +101,7 @@ public class AuthService {
             UUID id=jdbc.sql("SELECT id FROM app_user WHERE lower(email)=:email FOR UPDATE").param("email",email)
                     .query(UUID.class).optional().orElse(null);
             if(id==null) {
+                if(!policy.memberOtpEnabled()) return new Verification(null,null,null,HttpStatus.BAD_REQUEST);
                 id=jdbc.sql("INSERT INTO app_user(email,display_name) VALUES (:email,:name) RETURNING id")
                         .param("email",email).param("name","Thành viên").query(UUID.class).single();
                 jdbc.sql("INSERT INTO user_role(user_id,role_code) VALUES (:id,'MEMBER')").param("id",id).update();
@@ -106,6 +109,7 @@ public class AuthService {
             User user=users.get(id);
             if(user.getStatus()!=vn.gowithbae.api.model.UserStatus.ACTIVE)
                 return new Verification(null,null,null,HttpStatus.UNAUTHORIZED);
+            if(!policy.memberOtpEnabled() && !isStaff(user)) return new Verification(null,null,null,HttpStatus.BAD_REQUEST);
             if(isStaff(user)) {
                 // OTP email đã đúng: báo rõ bước tiếp theo, không tính là nhập sai và chưa tiêu thụ OTP.
                 if(!mfa.isEnrolled(id))
@@ -118,23 +122,89 @@ public class AuthService {
                 }
             }
             jdbc.sql("UPDATE login_challenge SET used_at=now() WHERE id=:id").param("id",c.id()).update();
-            var expires=OffsetDateTime.now(ZoneOffset.UTC).plus(policy.sessionTtl());
-            UUID sid=jdbc.sql("""
-                    INSERT INTO access_session(user_id,expires_at,ip_address,user_agent,last_seen_at)
-                    VALUES (:id,:expiry,:ip,:agent,now()) RETURNING id
-                    """)
-                    .param("id",id).param("expiry",expires).param("ip",clientIp()).param("agent",userAgent())
-                    .query(UUID.class).single();
-            return new Verification(user,sid,expires,null);
+            return openSession(user);
         });
         requireSuccess(result);
+        return issue(result,isStaff(result.user())?java.util.List.of("email_otp","totp"):java.util.List.of("email_otp"));
+    }
+
+    /**
+     * Đăng nhập Google (CR-002): tìm theo `sub`, sau đó theo email đã xác minh (gộp tài khoản cũ), nếu chưa có thì tạo
+     * thành viên mới. Tài khoản nội bộ bị từ chối để luôn đi qua email + Authenticator.
+     */
+    public AuthToken loginWithGoogle(String idToken) {
+        if(!limiter.consume("google-login-ip",peer(),policy.verifiesPerQuarterHour(),Duration.ofMinutes(15)))
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,"Vượt hạn mức đăng nhập");
+        if(idToken==null || idToken.isBlank() || idToken.length()>4096)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"Thiếu Google ID token");
+        GoogleIdTokenVerifier.GoogleIdentity identity;
+        try { identity=google.verify(idToken.strip()); }
+        catch(GoogleIdTokenVerifier.InvalidGoogleTokenException e) {
+            throw Problems.status(HttpStatus.UNAUTHORIZED,"GOOGLE_TOKEN_INVALID","Không xác minh được tài khoản Google, vui lòng thử lại");
+        }
+        if(identity.subject()==null || identity.subject().isBlank() || identity.email()==null || !identity.emailVerified())
+            throw Problems.status(HttpStatus.UNAUTHORIZED,"GOOGLE_EMAIL_UNVERIFIED","Email Google chưa được xác minh");
+        String email=normalizeEmail(identity.email());
+        String sub=identity.subject();
+        String rawName=identity.name()==null ? "" : identity.name().strip();
+        String name=rawName.isEmpty() ? "Thành viên" : rawName.substring(0,Math.min(rawName.length(),100));
+        Verification result=tx.execute(status->{
+            lockEmail(email);
+            UUID id=jdbc.sql("SELECT id FROM app_user WHERE google_sub=:sub FOR UPDATE").param("sub",sub)
+                    .query(UUID.class).optional().orElse(null);
+            if(id==null) {
+                id=jdbc.sql("SELECT id FROM app_user WHERE lower(email)=:email FOR UPDATE").param("email",email)
+                        .query(UUID.class).optional().orElse(null);
+                if(id!=null && isStaff(users.get(id)))
+                    return new Verification(null,null,null,HttpStatus.FORBIDDEN,"STAFF_USE_ADMIN_LOGIN"); // không gắn Google vào tài khoản nội bộ
+                if(id!=null) {
+                    String linked=jdbc.sql("SELECT google_sub FROM app_user WHERE id=:id").param("id",id).query(String.class).optional().orElse(null);
+                    if(linked!=null && !linked.equals(sub))
+                        return new Verification(null,null,null,HttpStatus.UNAUTHORIZED,"GOOGLE_ACCOUNT_CONFLICT");
+                    jdbc.sql("UPDATE app_user SET google_sub=:sub,updated_at=now() WHERE id=:id").param("sub",sub).param("id",id).update();
+                }
+            }
+            if(id==null) {
+                id=jdbc.sql("INSERT INTO app_user(email,display_name,google_sub) VALUES (:email,:name,:sub) RETURNING id")
+                        .param("email",email).param("name",name).param("sub",sub).query(UUID.class).single();
+                jdbc.sql("INSERT INTO user_role(user_id,role_code) VALUES (:id,'MEMBER')").param("id",id).update();
+            }
+            User user=users.get(id);
+            if(user.getStatus()!=vn.gowithbae.api.model.UserStatus.ACTIVE)
+                return new Verification(null,null,null,HttpStatus.UNAUTHORIZED);
+            if(isStaff(user)) return new Verification(null,null,null,HttpStatus.FORBIDDEN,"STAFF_USE_ADMIN_LOGIN");
+            return openSession(user);
+        });
+        requireSuccess(result);
+        return issue(result,java.util.List.of("google"));
+    }
+
+    private Verification openSession(User user) {
+        var expires=OffsetDateTime.now(ZoneOffset.UTC).plus(policy.sessionTtl());
+        UUID sid=jdbc.sql("""
+                INSERT INTO access_session(user_id,expires_at,ip_address,user_agent,last_seen_at)
+                VALUES (:id,:expiry,:ip,:agent,now()) RETURNING id
+                """)
+                .param("id",user.getId()).param("expiry",expires).param("ip",clientIp()).param("agent",userAgent())
+                .query(UUID.class).single();
+        return new Verification(user,sid,expires,null);
+    }
+
+    private AuthToken issue(Verification result,java.util.List<String> amr) {
         Instant now=Instant.now();
         var claims=JwtClaimsSet.builder().issuer("gowithbae").subject(result.user().getId().toString()).issuedAt(now)
                 .expiresAt(result.expiresAt().toInstant()).claim("sid",result.sessionId().toString())
-                .claim("amr",isStaff(result.user())?java.util.List.of("email_otp","totp"):java.util.List.of("email_otp"))
+                .claim("amr",amr)
                 .claim("roles",result.user().getRoles().stream().map(Object::toString).toList()).build();
         String jwt=encoder.encode(JwtEncoderParameters.from(JwsHeader.with(MacAlgorithm.HS256).build(),claims)).getTokenValue();
         return new AuthToken(jwt,result.expiresAt(),result.user());
+    }
+
+    private boolean isStaffEmail(String email) {
+        return jdbc.sql("""
+                SELECT EXISTS(SELECT 1 FROM app_user u JOIN user_role r ON r.user_id=u.id
+                              WHERE lower(u.email)=:email AND r.role_code<>'MEMBER')
+                """).param("email",email).query(Boolean.class).single();
     }
 
     public User verifyEmailChange(UUID userId,String code) {
@@ -164,6 +234,10 @@ public class AuthService {
     private void requireSuccess(Verification result) {
         if("STAFF_CODE_REQUIRED".equals(result.errorCode()))
             throw Problems.status(result.error(),result.errorCode(),"Nhập mã 6 số trong ứng dụng Authenticator");
+        if("STAFF_USE_ADMIN_LOGIN".equals(result.errorCode()))
+            throw Problems.status(result.error(),result.errorCode(),"Tài khoản quản trị đăng nhập bằng email và Authenticator tại trang quản trị");
+        if("GOOGLE_ACCOUNT_CONFLICT".equals(result.errorCode()))
+            throw Problems.status(result.error(),result.errorCode(),"Email này đã gắn với một tài khoản Google khác");
         if("MFA_NOT_ENROLLED".equals(result.errorCode()))
             throw Problems.status(result.error(),result.errorCode(),"Tài khoản quản trị chưa kích hoạt TOTP; dùng link kích hoạt do quản trị viên cấp");
         if(result.error()!=null) throw new ResponseStatusException(result.error(),

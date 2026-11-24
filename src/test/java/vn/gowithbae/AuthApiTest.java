@@ -28,7 +28,7 @@ import vn.gowithbae.auth.OtpDelivery;
 @Testcontainers(disabledWithoutDocker = true)
 @Import({TestcontainersConfiguration.class, AuthApiTest.MailboxConfiguration.class})
 @SpringBootTest(properties = {"app.jwt.secret=test-secret-test-secret-test-secret-123", "DB_URL=", "DB_USERNAME=", "DB_PASSWORD=",
-        "app.auth.resend-cooldown=PT0S"})
+        "app.auth.resend-cooldown=PT0S", "app.auth.member-otp-enabled=true"})
 @AutoConfigureMockMvc
 class AuthApiTest {
     @Autowired MockMvc mvc;
